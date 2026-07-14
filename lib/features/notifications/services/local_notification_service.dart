@@ -127,6 +127,8 @@ final class LocalNotificationService implements ILocalNotificationService {
           _nextInstance(reminder.time, weekday: weekday),
           details,
           androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
           matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
         );
       }
@@ -141,6 +143,8 @@ final class LocalNotificationService implements ILocalNotificationService {
       _nextInstance(reminder.time),
       details,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: reminder.repeat == ReminderRepeat.daily
           ? DateTimeComponents.time
           : null,

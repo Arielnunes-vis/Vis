@@ -5,8 +5,8 @@
 #   SUPABASE_ANON_KEY   = a chave anon (public) do Supabase
 set -euo pipefail
 
-echo "==> Instalando Flutter (stable)…"
-git clone https://github.com/flutter/flutter.git --depth 1 -b stable "$HOME/flutter"
+echo "==> Instalando Flutter 3.29.3 (versão fixada, compatível com os pacotes)…"
+git clone https://github.com/flutter/flutter.git --depth 1 -b 3.29.3 "$HOME/flutter"
 export PATH="$HOME/flutter/bin:$PATH"
 git config --global --add safe.directory "$HOME/flutter" || true
 

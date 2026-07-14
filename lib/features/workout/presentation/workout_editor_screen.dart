@@ -6,6 +6,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../shared/widgets/widgets.dart';
+import '../controllers/workout_editor_controller.dart';
 import '../domain/workout_enums.dart';
 import '../models/workout_day.dart';
 import '../models/workout_exercise.dart';
