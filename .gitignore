@@ -1,0 +1,42 @@
+# ---- Flutter / Dart ----
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+coverage/
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.iml
+*.log
+
+# ---- Ambiente / segredos (NUNCA versionar) ----
+.env
+.env.local
+.env.*.local
+*.keystore
+*.jks
+key.properties
+
+# ---- Build gerado ----
+**/*.g.dart
+**/*.freezed.dart
+
+# ---- Plataformas ----
+android/.gradle/
+android/app/debug/
+android/app/profile/
+android/app/release/
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+macos/Pods/
+
+# ---- SO ----
+.DS_Store
+Thumbs.db

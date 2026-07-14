@@ -1,0 +1,13 @@
+# Configuração de build/deploy do VIS (web) na Netlify.
+# A Netlify roda `netlify_build.sh`, que instala o Flutter, gera a
+# plataforma web, injeta as chaves do Supabase e compila para build/web.
+
+[build]
+  command = "bash netlify_build.sh"
+  publish = "build/web"
+
+# SPA: qualquer rota cai no index.html (o GoRouter cuida da navegação).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
