@@ -20,6 +20,9 @@ echo "==> Criando .env a partir das variáveis de ambiente…"
 printf 'SUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\n' \
   "${SUPABASE_URL:-}" "${SUPABASE_ANON_KEY:-}" > .env
 
+echo "==> Garantindo as pastas de assets declaradas no pubspec…"
+mkdir -p assets/images assets/icons assets/gifs assets/fonts
+
 echo "==> Baixando dependências e compilando…"
 flutter pub get
 flutter build web --release
