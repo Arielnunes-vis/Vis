@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Build do VIS (Flutter web) na Netlify.
-# Requer no painel da Netlify (Environment variables):
-#   SUPABASE_URL, SUPABASE_ANON_KEY
 set -euo pipefail
 
 echo "==> Instalando Flutter 3.29.3 (versao fixada, compativel com os pacotes)…"
@@ -39,7 +36,7 @@ printf 'SUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\n' "${SUPABASE_URL:-}" "${SUPABASE
 echo "==> Garantindo pastas de assets…"
 mkdir -p assets/images assets/icons assets/gifs assets/fonts
 
-echo "==> Escrevendo arquivos ajustados (Biblioteca + Nutricao + Gerador local + Finalizar treino + Fotos)…"
+echo "==> Escrevendo arquivos ajustados…"
 mkdir -p lib/shared/widgets/media
 echo "    - lib/features/exercise/domain/exercise_enums.dart"
 cat > lib/features/exercise/domain/exercise_enums.dart <<'DARTEOF_ENUMS'
@@ -4116,19 +4113,25 @@ class _BeforeAfterSliderState extends State<BeforeAfterSlider> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final w = constraints.maxWidth;
+                final h = constraints.maxHeight;
                 return Stack(
                   fit: StackFit.expand,
                   children: [
                     ProgressPhotoView(
-                        source: widget.afterPath, fit: BoxFit.cover),
+                      source: widget.afterPath,
+                      width: w,
+                      height: h,
+                      fit: BoxFit.cover,
+                    ),
                     ClipRect(
                       child: Align(
                         alignment: Alignment.centerLeft,
                         widthFactor: _value.clamp(0.0, 1.0),
-                        child: SizedBox(
+                        child: ProgressPhotoView(
+                          source: widget.beforePath,
                           width: w,
-                          child: ProgressPhotoView(
-                              source: widget.beforePath, fit: BoxFit.cover),
+                          height: h,
+                          fit: BoxFit.cover,
                         ),
                       ),
                     ),
