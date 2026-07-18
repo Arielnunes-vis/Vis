@@ -39,7 +39,7 @@ printf 'SUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\n' "${SUPABASE_URL:-}" "${SUPABASE
 echo "==> Garantindo pastas de assets…"
 mkdir -p assets/images assets/icons assets/gifs assets/fonts
 
-echo "==> Escrevendo arquivos ajustados (Biblioteca 66 exercicios + Nutricao + Gerador local + Finalizar treino)…"
+echo "==> Escrevendo arquivos ajustados (Biblioteca + Nutricao + Gerador local + Finalizar treino + Fotos)…"
 mkdir -p lib/shared/widgets/media
 echo "    - lib/features/exercise/domain/exercise_enums.dart"
 cat > lib/features/exercise/domain/exercise_enums.dart <<'DARTEOF_ENUMS'
@@ -567,6 +567,74 @@ class _AnimatedExerciseImageState extends State<AnimatedExerciseImage> {
 }
 DARTEOF_ANIMWIDGET
 
+echo "    - lib/shared/widgets/media/progress_photo_view.dart"
+cat > lib/shared/widgets/media/progress_photo_view.dart <<'DARTEOF_PHOTOVIEW'
+import 'dart:convert';
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
+
+import '../../../core/theme/app_colors.dart';
+
+/// Exibe uma foto de progresso a partir de uma "fonte" que pode ser:
+/// - data URL (`data:image/...;base64,...`) → decodifica e mostra os bytes
+///   (funciona na web, onde `Image.file` não funciona);
+/// - URL http/https → imagem de rede (cacheada);
+/// - qualquer outra coisa (ex.: caminho de arquivo antigo/blob) → espaço
+///   neutro, evitando a "imagem preta".
+class ProgressPhotoView extends StatelessWidget {
+  const ProgressPhotoView({
+    required this.source,
+    this.width,
+    this.height,
+    this.fit = BoxFit.cover,
+    super.key,
+  });
+
+  final String source;
+  final double? width;
+  final double? height;
+  final BoxFit fit;
+
+  @override
+  Widget build(BuildContext context) {
+    final placeholder =
+        Container(width: width, height: height, color: AppColors.card);
+
+    if (source.startsWith('data:')) {
+      final comma = source.indexOf(',');
+      if (comma == -1) return placeholder;
+      try {
+        final bytes = base64Decode(source.substring(comma + 1));
+        return Image.memory(
+          bytes,
+          width: width,
+          height: height,
+          fit: fit,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) => placeholder,
+        );
+      } catch (_) {
+        return placeholder;
+      }
+    }
+
+    if (source.startsWith('http')) {
+      return CachedNetworkImage(
+        imageUrl: source,
+        width: width,
+        height: height,
+        fit: fit,
+        placeholder: (_, __) => placeholder,
+        errorWidget: (_, __, ___) => placeholder,
+      );
+    }
+
+    return placeholder;
+  }
+}
+DARTEOF_PHOTOVIEW
+
 echo "    - lib/shared/widgets/widgets.dart"
 cat > lib/shared/widgets/widgets.dart <<'DARTEOF_BARREL'
 /// Barrel de exportação do Design System do VIS.
@@ -600,6 +668,7 @@ export 'feedback/offline_banner.dart';
 export 'inputs/search_field.dart';
 export 'inputs/vis_text_field.dart';
 export 'media/animated_exercise_image.dart';
+export 'media/progress_photo_view.dart';
 export 'navigation/bottom_navigation.dart';
 DARTEOF_BARREL
 
@@ -3767,6 +3836,330 @@ class _RestBar extends ConsumerWidget {
   }
 }
 DARTEOF_SESSIONSCREEN
+
+echo "    - lib/features/photo_analysis/services/photo_capture_service.dart"
+cat > lib/features/photo_analysis/services/photo_capture_service.dart <<'DARTEOF_PHOTOCAPT'
+import 'dart:convert';
+
+import 'package:image_picker/image_picker.dart';
+
+/// Origem da captura de foto.
+enum PhotoSourceKind { camera, gallery }
+
+/// Serviço de captura de fotos (PROMPT 13).
+///
+/// Encapsula o `image_picker`. A foto é lida como bytes e devolvida como
+/// data URL (`data:image/jpeg;base64,...`), formato que funciona tanto no
+/// app nativo quanto na web e que persiste no armazenamento local (não
+/// depende de um caminho de arquivo, que não existe no navegador).
+/// O upload para o Supabase Storage entra na camada de sincronização.
+abstract interface class IPhotoCaptureService {
+  Future<String?> capture(PhotoSourceKind source);
+}
+
+final class PhotoCaptureService implements IPhotoCaptureService {
+  PhotoCaptureService([ImagePicker? picker])
+      : _picker = picker ?? ImagePicker();
+
+  final ImagePicker _picker;
+
+  @override
+  Future<String?> capture(PhotoSourceKind source) async {
+    final file = await _picker.pickImage(
+      source: source == PhotoSourceKind.camera
+          ? ImageSource.camera
+          : ImageSource.gallery,
+      imageQuality: 80,
+      maxWidth: 1080,
+    );
+    if (file == null) return null;
+    final bytes = await file.readAsBytes();
+    return 'data:image/jpeg;base64,${base64Encode(bytes)}';
+  }
+}
+DARTEOF_PHOTOCAPT
+
+echo "    - lib/features/photo_analysis/presentation/photos_gallery_screen.dart"
+cat > lib/features/photo_analysis/presentation/photos_gallery_screen.dart <<'DARTEOF_PHOTOGAL'
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/logger/app_logger.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../../body_progress/domain/body_enums.dart';
+import '../../body_progress/models/body_photo.dart';
+import '../providers/photo_providers.dart';
+import '../services/photo_capture_service.dart';
+
+/// Galeria de fotos de progresso por pose (PROMPT 13).
+class PhotosGalleryScreen extends ConsumerWidget {
+  const PhotosGalleryScreen({super.key});
+
+  static const _poses = [
+    PhotoType.frontRelaxed,
+    PhotoType.frontFlexed,
+    PhotoType.sideRight,
+    PhotoType.sideLeft,
+    PhotoType.backRelaxed,
+    PhotoType.backFlexed,
+  ];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final photos = ref.watch(photoControllerProvider);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Fotos de progresso')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _addSheet(context, ref),
+        icon: const Icon(LucideIcons.camera),
+        label: const Text('Adicionar foto'),
+      ),
+      body: photos.isEmpty
+          ? const EmptyState(
+              icon: LucideIcons.camera,
+              title: 'Nenhuma foto ainda',
+              description:
+                  'Adicione fotos das poses para acompanhar a evolução.',
+            )
+          : ListView(
+              padding: const EdgeInsets.all(AppSpacing.m),
+              children: [
+                for (final pose in _poses)
+                  _PoseSection(
+                    pose: pose,
+                    photos:
+                        photos.where((p) => p.type == pose).toList(),
+                  ),
+              ],
+            ),
+    );
+  }
+
+  Future<void> _addSheet(BuildContext context, WidgetRef ref) async {
+    PhotoType selected = PhotoType.frontRelaxed;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModal) => Padding(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Adicionar foto', style: AppTypography.subtitle),
+              const SizedBox(height: AppSpacing.m),
+              Text('Pose', style: AppTypography.caption),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final p in _poses)
+                    VisChip(
+                      label: p.label,
+                      selected: selected == p,
+                      onTap: () => setModal(() => selected = p),
+                    ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.l),
+              Row(
+                children: [
+                  Expanded(
+                    child: SecondaryButton(
+                      label: 'Galeria',
+                      icon: LucideIcons.image,
+                      onPressed: () => _capture(
+                          ctx, ref, selected, PhotoSourceKind.gallery),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.m),
+                  Expanded(
+                    child: PrimaryButton(
+                      label: 'Câmera',
+                      icon: LucideIcons.camera,
+                      onPressed: () => _capture(
+                          ctx, ref, selected, PhotoSourceKind.camera),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _capture(
+    BuildContext ctx,
+    WidgetRef ref,
+    PhotoType type,
+    PhotoSourceKind source,
+  ) async {
+    Navigator.pop(ctx);
+    try {
+      await ref
+          .read(photoControllerProvider.notifier)
+          .capture(type: type, source: source);
+    } catch (e, st) {
+      AppLogger.e('[Photos] falha ao capturar imagem',
+          error: e, stackTrace: st);
+      if (ctx.mounted) {
+        AppSnackBar.show(ctx, 'Não foi possível acessar a imagem.',
+            type: SnackType.error);
+      }
+    }
+  }
+}
+
+class _PoseSection extends StatelessWidget {
+  const _PoseSection({required this.pose, required this.photos});
+  final PhotoType pose;
+  final List<BodyPhoto> photos;
+
+  @override
+  Widget build(BuildContext context) {
+    if (photos.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.l),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(pose.label, style: AppTypography.subtitle)),
+              if (photos.length >= 2)
+                TextButton.icon(
+                  icon: const Icon(LucideIcons.arrowLeftRight, size: 16),
+                  label: const Text('Comparar'),
+                  onPressed: () =>
+                      context.pushNamed('photos-compare', extra: pose),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s),
+          SizedBox(
+            height: 140,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: photos.length,
+              separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.s),
+              itemBuilder: (_, i) {
+                final p = photos[i];
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: p.displayPath != null
+                      ? ProgressPhotoView(
+                          source: p.displayPath!,
+                          width: 110,
+                          height: 140,
+                        )
+                      : Container(
+                          width: 110,
+                          height: 140,
+                          color: AppColors.card,
+                        ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+DARTEOF_PHOTOGAL
+
+echo "    - lib/features/photo_analysis/widgets/before_after_slider.dart"
+cat > lib/features/photo_analysis/widgets/before_after_slider.dart <<'DARTEOF_BASLIDER'
+import 'package:flutter/material.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../shared/widgets/media/progress_photo_view.dart';
+
+/// Slider de comparação antes/depois (PROMPT 13).
+///
+/// Revela a foto "antes" sobre a "depois" conforme o controle desliza.
+class BeforeAfterSlider extends StatefulWidget {
+  const BeforeAfterSlider({
+    required this.beforePath,
+    required this.afterPath,
+    super.key,
+  });
+
+  final String beforePath;
+  final String afterPath;
+
+  @override
+  State<BeforeAfterSlider> createState() => _BeforeAfterSliderState();
+}
+
+class _BeforeAfterSliderState extends State<BeforeAfterSlider> {
+  double _value = 0.5;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        AspectRatio(
+          aspectRatio: 4 / 5,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final w = constraints.maxWidth;
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ProgressPhotoView(
+                        source: widget.afterPath, fit: BoxFit.cover),
+                    ClipRect(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        widthFactor: _value.clamp(0.0, 1.0),
+                        child: SizedBox(
+                          width: w,
+                          child: ProgressPhotoView(
+                              source: widget.beforePath, fit: BoxFit.cover),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: (w * _value) - 1,
+                      top: 0,
+                      bottom: 0,
+                      child: Container(width: 2, color: Colors.white),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+        Slider(
+          value: _value,
+          onChanged: (v) => setState(() => _value = v),
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Antes', style: TextStyle(color: AppColors.textSecondary)),
+            Text('Depois', style: TextStyle(color: AppColors.textSecondary)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+DARTEOF_BASLIDER
 
 echo "==> Baixando dependencias e compilando…"
 flutter pub get
