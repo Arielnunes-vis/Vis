@@ -37,7 +37,55 @@ echo "==> Garantindo pastas de assets…"
 mkdir -p assets/images assets/icons assets/gifs assets/fonts
 
 echo "==> Escrevendo arquivos ajustados…"
-mkdir -p lib/shared/widgets/media
+mkdir -p lib/shared/widgets/media lib/shared/widgets/navigation
+echo "    - lib/core/theme/app_colors.dart"
+cat > lib/core/theme/app_colors.dart <<'DARTEOF_COLORS'
+import 'package:flutter/material.dart';
+
+/// Paleta de cores do VIS.
+///
+/// Fonte de verdade: 07_DESIGN_SYSTEM.md (Dark Mode).
+/// O Light Mode está previsto para o futuro, portanto os tokens
+/// são expostos de forma semântica para facilitar a expansão.
+abstract final class AppColors {
+  const AppColors._();
+
+  // ----- Superfícies (Dark) -----
+  static const Color background = Color(0xFF0B0B0B);
+  static const Color surface = Color(0xFF111111);
+  static const Color card = Color(0xFF1A1A1A);
+  static const Color elevated = Color(0xFF1C1C1E);
+
+  // ----- Marca -----
+  static const Color primary = Color(0xFF3A86FF);
+  static const Color secondary = Color(0xFF6C63FF);
+
+  // ----- Acentos por seção (cabeçalhos coloridos) -----
+  static const Color accentGreen = Color(0xFF2FBF71);
+  static const Color accentOrange = Color(0xFFFF8A3D);
+  static const Color accentTeal = Color(0xFF17BEBB);
+  static const Color accentPink = Color(0xFFF4468F);
+
+  // ----- Feedback -----
+  static const Color success = Color(0xFF34C759);
+  static const Color warning = Color(0xFFFFCC00);
+  static const Color danger = Color(0xFFFF453A);
+
+  // ----- Texto -----
+  static const Color textPrimary = Color(0xFFFFFFFF);
+  static const Color textSecondary = Color(0xFFB3B3B3);
+  static const Color disabled = Color(0xFF707070);
+
+  // ----- Estrutura -----
+  static const Color divider = Color(0xFF2A2A2A);
+
+  // ----- Aliases semânticos -----
+  static const Color onPrimary = Color(0xFFFFFFFF);
+  static const Color onSurface = textPrimary;
+  static const Color onSurfaceVariant = textSecondary;
+}
+DARTEOF_COLORS
+
 echo "    - lib/features/exercise/domain/exercise_enums.dart"
 cat > lib/features/exercise/domain/exercise_enums.dart <<'DARTEOF_ENUMS'
 /// Enums e vocabulários do catálogo de exercícios (PROMPT 05 /
@@ -632,6 +680,58 @@ class ProgressPhotoView extends StatelessWidget {
 }
 DARTEOF_PHOTOVIEW
 
+echo "    - lib/shared/widgets/navigation/vis_app_bar.dart"
+cat > lib/shared/widgets/navigation/vis_app_bar.dart <<'DARTEOF_VISAPPBAR'
+import 'package:flutter/material.dart';
+
+/// AppBar do VIS com cabeçalho colorido em degradê (identidade por seção).
+///
+/// Mantém o tema escuro do app, mas dá cor a cada área (Biblioteca, Nutrição,
+/// Cardio, Evolução, Fotos…), em vez de tudo preto. Texto e ícones ficam
+/// brancos sobre a cor.
+class VisAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const VisAppBar({
+    required this.title,
+    required this.accent,
+    this.actions,
+    this.bottom,
+    super.key,
+  });
+
+  final String title;
+  final Color accent;
+  final List<Widget>? actions;
+  final PreferredSizeWidget? bottom;
+
+  @override
+  Size get preferredSize =>
+      Size.fromHeight(kToolbarHeight + (bottom?.preferredSize.height ?? 0));
+
+  @override
+  Widget build(BuildContext context) {
+    final darker = Color.alphaBlend(Colors.black.withValues(alpha: 0.45), accent);
+    return AppBar(
+      title: Text(title),
+      actions: actions,
+      bottom: bottom,
+      foregroundColor: Colors.white,
+      backgroundColor: accent,
+      surfaceTintColor: Colors.transparent,
+      iconTheme: const IconThemeData(color: Colors.white),
+      flexibleSpace: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [accent, darker],
+          ),
+        ),
+      ),
+    );
+  }
+}
+DARTEOF_VISAPPBAR
+
 echo "    - lib/shared/widgets/widgets.dart"
 cat > lib/shared/widgets/widgets.dart <<'DARTEOF_BARREL'
 /// Barrel de exportação do Design System do VIS.
@@ -667,6 +767,7 @@ export 'inputs/vis_text_field.dart';
 export 'media/animated_exercise_image.dart';
 export 'media/progress_photo_view.dart';
 export 'navigation/bottom_navigation.dart';
+export 'navigation/vis_app_bar.dart';
 DARTEOF_BARREL
 
 echo "    - lib/shared/widgets/cards/exercise_card.dart"
@@ -1871,7 +1972,7 @@ class ExerciseLibraryScreen extends ConsumerWidget {
     final c = ref.read(exerciseLibraryControllerProvider.notifier);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Biblioteca')),
+      appBar: const VisAppBar(title: 'Biblioteca', accent: AppColors.primary),
       body: Column(
         children: [
           Padding(
@@ -2220,9 +2321,8 @@ import '../providers/nutrition_providers.dart';
 
 /// Bottom sheet de registro manual de refeição (PROMPT 10).
 ///
-/// Os campos de macros são informados **por 100 g** (como vem no rótulo)
-/// e o app calcula o total automaticamente a partir da quantidade em
-/// gramas informada em "Qtd (g)".
+/// Entrada manual: você digita os valores totais do alimento (calorias e
+/// macros) que pesquisou. O app apenas soma os itens.
 class AddMealSheet extends ConsumerStatefulWidget {
   const AddMealSheet({super.key});
 
@@ -2261,26 +2361,18 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
   double _d(TextEditingController c) =>
       double.tryParse(c.text.replaceAll(',', '.')) ?? 0;
 
-  /// Fator de conversão: os macros são por 100 g, então o total é
-  /// proporcional às gramas informadas.
-  double get _factor {
-    final grams = _d(_qty);
-    return grams <= 0 ? 0 : grams / 100.0;
-  }
-
   FoodItem? _buildItem() {
     if (_name.text.trim().isEmpty) return null;
-    final f = _factor;
     return FoodItem(
       id: _uuid.v4(),
       name: _name.text.trim(),
       quantity: _d(_qty),
       unit: MeasureUnit.grams,
       macros: MacroNutrients(
-        calories: _d(_kcal) * f,
-        protein: _d(_protein) * f,
-        carbs: _d(_carbs) * f,
-        fats: _d(_fats) * f,
+        calories: _d(_kcal),
+        protein: _d(_protein),
+        carbs: _d(_carbs),
+        fats: _d(_fats),
       ),
     );
   }
@@ -2328,8 +2420,7 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final total =
-        _items.fold(MacroNutrients.zero, (s, i) => s + i.macros);
+    final total = _items.fold(MacroNutrients.zero, (s, i) => s + i.macros);
     return Padding(
       padding: EdgeInsets.only(
         left: AppSpacing.l,
@@ -2364,7 +2455,6 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
                       contentPadding: EdgeInsets.zero,
                       title: Text(it.name, style: AppTypography.body),
                       subtitle: Text(
-                        '${it.quantity.toStringAsFixed(0)} g · '
                         '${it.macros.calories.toStringAsFixed(0)} kcal · '
                         'P ${it.macros.protein.toStringAsFixed(0)}g',
                         style: AppTypography.small,
@@ -2376,27 +2466,23 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
                     ),
                   VisTextField(label: 'Alimento', controller: _name),
                   const SizedBox(height: AppSpacing.s),
-                  _num('Qtd (g) — quanto você comeu', _qty),
-                  const SizedBox(height: AppSpacing.m),
-                  Text('Valores por 100 g (como vêm no rótulo)',
-                      style: AppTypography.small),
-                  const SizedBox(height: AppSpacing.xs),
                   Row(
                     children: [
-                      Expanded(child: _num('Calorias', _kcal)),
+                      Expanded(child: _num('Qtd (g)', _qty)),
                       const SizedBox(width: 8),
-                      Expanded(child: _num('Proteína', _protein)),
+                      Expanded(child: _num('Calorias', _kcal)),
                     ],
                   ),
                   const SizedBox(height: AppSpacing.s),
                   Row(
                     children: [
+                      Expanded(child: _num('Proteína', _protein)),
+                      const SizedBox(width: 8),
                       Expanded(child: _num('Carbo', _carbs)),
                       const SizedBox(width: 8),
                       Expanded(child: _num('Gordura', _fats)),
                     ],
                   ),
-                  _preview(),
                   const SizedBox(height: AppSpacing.s),
                   SecondaryButton(
                     label: 'Adicionar item',
@@ -2422,33 +2508,347 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
     );
   }
 
-  /// Prévia do total calculado para a quantidade informada.
-  Widget _preview() {
-    final grams = _d(_qty);
-    final kcal = _d(_kcal);
-    if (grams <= 0 || kcal <= 0) return const SizedBox.shrink();
-    final f = _factor;
-    return Padding(
-      padding: const EdgeInsets.only(top: AppSpacing.s),
-      child: Text(
-        '≈ ${(kcal * f).toStringAsFixed(0)} kcal · '
-        'P ${(_d(_protein) * f).toStringAsFixed(0)}g · '
-        'C ${(_d(_carbs) * f).toStringAsFixed(0)}g · '
-        'G ${(_d(_fats) * f).toStringAsFixed(0)}g '
-        'para ${grams.toStringAsFixed(0)} g',
-        style: AppTypography.caption,
-      ),
-    );
-  }
-
   Widget _num(String label, TextEditingController c) => VisTextField(
         label: label,
         controller: c,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        onChanged: (_) => setState(() {}),
       );
 }
 DARTEOF_MEALSHEET
+
+echo "    - lib/features/nutrition/presentation/nutrition_screen.dart"
+cat > lib/features/nutrition/presentation/nutrition_screen.dart <<'DARTEOF_NUTRISCREEN'
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../domain/nutrition_enums.dart';
+import '../models/macro_nutrients.dart';
+import '../models/nutrition_goal.dart';
+import '../providers/nutrition_providers.dart';
+import '../widgets/add_meal_sheet.dart';
+
+/// Tela de nutrição — resumo do dia, água e refeições (PROMPT 10).
+class NutritionScreen extends ConsumerWidget {
+  const NutritionScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final day = ref.watch(nutritionControllerProvider);
+    final goal = ref.watch(nutritionGoalProvider);
+    final macros = day.macros;
+
+    return Scaffold(
+      appBar: const VisAppBar(title: 'Nutrição', accent: AppColors.accentGreen),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => AddMealSheet.show(context),
+        icon: const Icon(LucideIcons.plus),
+        label: const Text('Refeição'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(AppSpacing.m),
+        children: [
+          _summary(macros, goal),
+          const SizedBox(height: AppSpacing.m),
+          _water(context, ref, day.waterMl, goal.waterMl ?? 2500),
+          const SizedBox(height: AppSpacing.m),
+          Text('Refeições de hoje', style: AppTypography.subtitle),
+          const SizedBox(height: AppSpacing.s),
+          if (day.meals.isEmpty)
+            Text('Nenhuma refeição registrada hoje.',
+                style: AppTypography.caption)
+          else
+            for (final m in day.meals)
+              CardContainer(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(LucideIcons.utensils,
+                        size: 18, color: AppColors.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(m.type.label, style: AppTypography.body),
+                          Text(
+                            m.items.map((i) => i.name).join(', '),
+                            style: AppTypography.small,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text('${m.macros.calories.toStringAsFixed(0)} kcal',
+                        style: AppTypography.small),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summary(MacroNutrients macros, NutritionGoal goal) {
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Resumo do dia', style: AppTypography.subtitle),
+          const SizedBox(height: AppSpacing.s),
+          _bar('Calorias', macros.calories, goal.calories ?? 2200, 'kcal',
+              AppColors.primary),
+          _bar('Proteína', macros.protein, goal.protein ?? 140, 'g',
+              AppColors.success),
+          _bar('Carboidrato', macros.carbs, goal.carbs ?? 250, 'g',
+              AppColors.warning),
+          _bar('Gordura', macros.fats, goal.fats ?? 70, 'g', AppColors.secondary),
+        ],
+      ),
+    );
+  }
+
+  Widget _bar(
+    String label,
+    double current,
+    double goal,
+    String unit,
+    Color color,
+  ) {
+    final progress = goal <= 0 ? 0.0 : (current / goal).clamp(0.0, 1.0);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(label, style: AppTypography.body)),
+              Text('${current.toStringAsFixed(0)} / ${goal.toStringAsFixed(0)} $unit',
+                  style: AppTypography.small),
+            ],
+          ),
+          const SizedBox(height: 4),
+          VisProgressBar(value: progress, color: color),
+        ],
+      ),
+    );
+  }
+
+  Widget _water(BuildContext context, WidgetRef ref, int current, int goal) {
+    final progress = goal <= 0 ? 0.0 : (current / goal).clamp(0.0, 1.0);
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(LucideIcons.droplet, color: AppColors.primary, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Água', style: AppTypography.subtitle)),
+              Text('$current / $goal ml', style: AppTypography.small),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s),
+          VisProgressBar(value: progress, color: AppColors.primary),
+          const SizedBox(height: AppSpacing.s),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final w in WaterContainer.values)
+                ActionChip(
+                  label: Text(w.label),
+                  onPressed: () => ref
+                      .read(nutritionControllerProvider.notifier)
+                      .addWater(w.ml),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+DARTEOF_NUTRISCREEN
+
+echo "    - lib/features/cardio/presentation/cardio_screen.dart"
+cat > lib/features/cardio/presentation/cardio_screen.dart <<'DARTEOF_CARDIOSCREEN'
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../models/cardio_session.dart';
+import '../models/cardio_stats.dart';
+import '../providers/cardio_providers.dart';
+import '../widgets/add_cardio_sheet.dart';
+
+/// Módulo de cardio: resumo, recordes e histórico (PROMPT 09).
+class CardioScreen extends ConsumerWidget {
+  const CardioScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sessions = ref.watch(cardioControllerProvider);
+    final repo = ref.watch(cardioRepositoryProvider);
+    final now = DateTime.now();
+    final startOfWeek = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: now.weekday - 1));
+    final week = repo.statsSince(startOfWeek);
+    final records = repo.records();
+
+    return Scaffold(
+      appBar: const VisAppBar(title: 'Cardio', accent: AppColors.accentOrange),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => AddCardioSheet.show(context),
+        icon: const Icon(LucideIcons.plus),
+        label: const Text('Registrar cardio'),
+      ),
+      body: sessions.isEmpty
+          ? const EmptyState(
+              icon: LucideIcons.heartPulse,
+              title: 'Nenhum cardio registrado',
+              description: 'Registre suas atividades para acompanhar.',
+            )
+          : ListView(
+              padding: const EdgeInsets.all(AppSpacing.m),
+              children: [
+                _WeeklyCard(stats: week),
+                const SizedBox(height: AppSpacing.m),
+                _RecordsCard(records: records),
+                const SizedBox(height: AppSpacing.m),
+                Text('Histórico', style: AppTypography.subtitle),
+                const SizedBox(height: AppSpacing.s),
+                for (final s in sessions.take(20)) _SessionRow(session: s),
+              ],
+            ),
+    );
+  }
+}
+
+class _WeeklyCard extends StatelessWidget {
+  const _WeeklyCard({required this.stats});
+  final CardioStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Esta semana', style: AppTypography.subtitle),
+          const SizedBox(height: AppSpacing.s),
+          Wrap(
+            runSpacing: AppSpacing.m,
+            children: [
+              _metric('Sessões', '${stats.sessions}'),
+              _metric('Tempo', '${stats.totalMinutes} min'),
+              _metric('Distância', '${stats.totalDistance.toStringAsFixed(1)} km'),
+              _metric('Calorias', '${stats.totalCalories.toStringAsFixed(0)}'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metric(String label, String value) => SizedBox(
+        width: 150,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(value, style: AppTypography.title),
+            Text(label, style: AppTypography.small),
+          ],
+        ),
+      );
+}
+
+class _RecordsCard extends StatelessWidget {
+  const _RecordsCard({required this.records});
+  final CardioRecords records;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <(String, String)>[
+      if (records.maxDistanceKm != null)
+        ('Maior distância', '${records.maxDistanceKm!.toStringAsFixed(1)} km'),
+      if (records.maxDurationSeconds != null)
+        ('Maior tempo', '${(records.maxDurationSeconds! / 60).round()} min'),
+      if (records.maxSpeedKmh != null)
+        ('Maior velocidade', '${records.maxSpeedKmh!.toStringAsFixed(1)} km/h'),
+    ];
+    if (items.isEmpty) return const SizedBox.shrink();
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Recordes', style: AppTypography.subtitle),
+          const SizedBox(height: AppSpacing.s),
+          for (final it in items)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(child: Text(it.$1, style: AppTypography.body)),
+                  Text(it.$2,
+                      style: AppTypography.body
+                          .copyWith(color: AppColors.primary)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionRow extends StatelessWidget {
+  const _SessionRow({required this.session});
+  final CardioSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <String>[
+      '${session.minutes} min',
+      if (session.distanceKm != null)
+        '${session.distanceKm!.toStringAsFixed(1)} km',
+      if (session.paceLabel != null) session.paceLabel!,
+      if (session.calories != null) '${session.calories!.toStringAsFixed(0)} kcal',
+    ];
+    return CardContainer(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.heartPulse, color: AppColors.primary, size: 18),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(session.type.label, style: AppTypography.body),
+                Text(parts.join(' · '), style: AppTypography.small),
+              ],
+            ),
+          ),
+          Text(_date(session.performedAt), style: AppTypography.small),
+        ],
+      ),
+    );
+  }
+
+  String _date(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}';
+}
+DARTEOF_CARDIOSCREEN
 
 echo "    - lib/features/ai_workout/data/local_ai_workout_service.dart"
 cat > lib/features/ai_workout/data/local_ai_workout_service.dart <<'DARTEOF_LOCALAISVC'
@@ -3259,6 +3659,147 @@ class _SectionCard extends StatelessWidget {
 }
 DARTEOF_DASHSECT
 
+echo "    - lib/features/dashboard/presentation/dashboard_screen.dart"
+cat > lib/features/dashboard/presentation/dashboard_screen.dart <<'DARTEOF_DASHSCREEN'
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../../authentication/providers/authentication_providers.dart';
+import '../models/dashboard_data.dart';
+import '../providers/dashboard_providers.dart';
+import '../widgets/dashboard_skeleton.dart';
+import '../widgets/muscle_volume_bars.dart';
+
+part 'dashboard_sections.dart';
+
+/// Dashboard Inteligente — primeira tela após o login (PROMPT 07).
+class DashboardScreen extends ConsumerWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(dashboardControllerProvider);
+    final name = ref.watch(currentUserProvider).value?.name?.split(' ').first;
+
+    return Scaffold(
+      appBar: AppBar(
+        foregroundColor: Colors.white,
+        backgroundColor: AppColors.primary,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
+        flexibleSpace: const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.primary, AppColors.secondary],
+            ),
+          ),
+        ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_greeting(name),
+                style: AppTypography.subtitle.copyWith(color: Colors.white)),
+            Text(_todayLabel(),
+                style: AppTypography.small.copyWith(color: Colors.white70)),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.bell),
+            onPressed: () => context.pushNamed('notifications'),
+          ),
+          IconButton(
+            icon: const Icon(LucideIcons.settings),
+            onPressed: () => context.pushNamed('settings'),
+          ),
+        ],
+      ),
+      body: async.when(
+        loading: () => const DashboardSkeleton(),
+        error: (_, __) => ErrorState(
+          onRetry: () =>
+              ref.read(dashboardControllerProvider.notifier).refresh(),
+        ),
+        data: (data) => RefreshIndicator(
+          onRefresh: () =>
+              ref.read(dashboardControllerProvider.notifier).refresh(),
+          child: ListView(
+            padding: const EdgeInsets.all(AppSpacing.m),
+            children: _cards(context, ref, data),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _cards(BuildContext context, WidgetRef ref, DashboardData d) {
+    return [
+      if (d.insight != null) ...[
+        InsightCard(
+          message: '${d.insight!.message}'
+              '${d.insight!.reason != null ? '\n\n${d.insight!.reason}' : ''}',
+          onDetails: () => context.pushNamed('insights'),
+        ),
+        const SizedBox(height: AppSpacing.m),
+      ],
+      _NextWorkoutCard(data: d),
+      const SizedBox(height: AppSpacing.m),
+      const _ShortcutsRow(),
+      const SizedBox(height: AppSpacing.m),
+      _SequenceCard(sequence: d.sequence),
+      const SizedBox(height: AppSpacing.m),
+      _GoalsCard(
+        sequence: d.sequence,
+        cardioMinutes: d.weeklyCardioMinutes,
+        todayProtein: d.todayProtein,
+        todayWaterMl: d.todayWaterMl,
+      ),
+      const SizedBox(height: AppSpacing.m),
+      _EvolutionCard(data: d),
+      const SizedBox(height: AppSpacing.m),
+      _WeeklyCard(weekly: d.weekly),
+      const SizedBox(height: AppSpacing.m),
+      _CalendarStrip(activity: d.recentActivity),
+      const SizedBox(height: AppSpacing.m),
+      _SectionCard(
+        title: 'Volume muscular (30 dias)',
+        child: MuscleVolumeBars(data: d.muscleVolume),
+      ),
+      const SizedBox(height: AppSpacing.m),
+      _RecentCard(activity: d.recentActivity),
+    ];
+  }
+
+  String _greeting(String? name) {
+    final h = DateTime.now().hour;
+    final part = h < 12 ? 'Bom dia' : (h < 18 ? 'Boa tarde' : 'Boa noite');
+    return name == null ? '$part 👋' : '$part, $name 👋';
+  }
+
+  String _todayLabel() {
+    const days = [
+      'segunda-feira',
+      'terça-feira',
+      'quarta-feira',
+      'quinta-feira',
+      'sexta-feira',
+      'sábado',
+      'domingo',
+    ];
+    return 'Hoje é ${days[DateTime.now().weekday - 1]}.';
+  }
+}
+
+DARTEOF_DASHSCREEN
+
 echo "    - lib/features/ai_workout/presentation/ai_workout_screen.dart"
 cat > lib/features/ai_workout/presentation/ai_workout_screen.dart <<'DARTEOF_AIWKSCREEN'
 import 'package:flutter/material.dart';
@@ -3834,6 +4375,503 @@ class _RestBar extends ConsumerWidget {
 }
 DARTEOF_SESSIONSCREEN
 
+echo "    - lib/features/workout_session/controllers/workout_session_controller.dart"
+cat > lib/features/workout_session/controllers/workout_session_controller.dart <<'DARTEOF_SESSIONCTRL'
+import 'dart:async';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../authentication/providers/authentication_providers.dart';
+import '../../workout/models/workout_day.dart';
+import '../../workout/models/workout_plan.dart';
+import '../domain/session_enums.dart';
+import '../models/workout_exercise_session.dart';
+import '../models/workout_session.dart';
+import '../models/workout_set_session.dart';
+import '../models/workout_summary.dart';
+import '../providers/workout_session_providers.dart';
+
+/// Estado de runtime da sessão: a sessão + o cronômetro de descanso.
+class SessionState {
+  const SessionState({
+    this.session,
+    this.restRemaining = 0,
+    this.restTotal = 0,
+  });
+
+  final WorkoutSession? session;
+  final int restRemaining;
+  final int restTotal;
+
+  bool get isResting => restRemaining > 0;
+  bool get hasActive => session != null && !session!.isFinished;
+
+  SessionState copyWith({
+    WorkoutSession? session,
+    int? restRemaining,
+    int? restTotal,
+  }) {
+    return SessionState(
+      session: session ?? this.session,
+      restRemaining: restRemaining ?? this.restRemaining,
+      restTotal: restTotal ?? this.restTotal,
+    );
+  }
+}
+
+/// Controller da execução de treino (PROMPT 06).
+class WorkoutSessionController extends Notifier<SessionState> {
+  final Uuid _uuid = const Uuid();
+  Timer? _ticker;
+  int _ticks = 0;
+
+  @override
+  SessionState build() {
+    // Retoma uma sessão pausada/ativa persistida (sobrevive ao fechar o app).
+    final active = ref.read(workoutSessionRepositoryProvider).loadActive();
+    ref.onDispose(() => _ticker?.cancel());
+    if (active != null) {
+      _startTicker();
+      return SessionState(session: active);
+    }
+    return const SessionState();
+  }
+
+  String _newId() => _uuid.v4();
+
+  void _startTicker() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  void _tick() {
+    final s = state.session;
+    if (s == null || s.isFinished) return;
+
+    if (state.restRemaining > 0) {
+      state = state.copyWith(
+        restRemaining: state.restRemaining - 1,
+        session: s.copyWith(restSeconds: s.restSeconds + 1),
+      );
+    } else if (!s.isPaused) {
+      state = state.copyWith(
+        session: s.copyWith(elapsedSeconds: s.elapsedSeconds + 1),
+      );
+    }
+
+    if (++_ticks % 5 == 0) _save();
+  }
+
+  // ---------- Início ----------
+  Future<void> start(WorkoutPlan plan, WorkoutDay day) async {
+    final uid = ref.read(authenticationRepositoryProvider).currentUser?.id ?? '';
+    final repo = ref.read(workoutSessionRepositoryProvider);
+    final exercises = day.exercises.map((we) {
+      // Pré-preenche com o último peso usado neste exercício (se houver).
+      final lastWeight = repo.lastWeightFor(we.exercise.id);
+      return WorkoutExerciseSession(
+        id: _newId(),
+        exercise: we.exercise,
+        sets: we.sets
+            .map((ps) => WorkoutSetSession(
+                  id: _newId(),
+                  setNumber: ps.setNumber,
+                  type: ps.type,
+                  targetReps: ps.targetReps,
+                  restSeconds: ps.restSeconds,
+                  weight: lastWeight,
+                ))
+            .toList(),
+      );
+    }).toList();
+
+    final session = WorkoutSession(
+      id: _newId(),
+      userId: uid,
+      planId: plan.id,
+      planName: plan.name,
+      dayName: day.name,
+      startedAt: DateTime.now(),
+      exercises: exercises,
+    );
+
+    state = SessionState(session: session);
+    await _save();
+    _startTicker();
+  }
+
+  // ---------- Edição das séries ----------
+  void updateSet(
+    int exIndex,
+    int setIndex, {
+    double? weight,
+    int? reps,
+    double? rpe,
+    String? note,
+  }) {
+    _mutateSet(exIndex, setIndex,
+        (s) => s.copyWith(weight: weight, reps: reps, rpe: rpe, note: note));
+  }
+
+  void completeSet(int exIndex, int setIndex) {
+    final s = state.session;
+    if (s == null) return;
+    final set = s.exercises[exIndex].sets[setIndex];
+    _mutateSet(exIndex, setIndex, (x) => x.copyWith(completed: true));
+    if (!set.isWarmup) startRest(set.restSeconds);
+    _save();
+  }
+
+  void uncompleteSet(int exIndex, int setIndex) {
+    _mutateSet(exIndex, setIndex, (x) => x.copyWith(completed: false));
+  }
+
+  void addSet(int exIndex) {
+    final s = state.session;
+    if (s == null) return;
+    final ex = s.exercises[exIndex];
+    final last = ex.sets.isNotEmpty ? ex.sets.last : null;
+    final newSet = WorkoutSetSession(
+      id: _newId(),
+      setNumber: ex.sets.length + 1,
+      targetReps: last?.targetReps ?? '',
+      restSeconds: last?.restSeconds ?? 90,
+      weight: last?.weight,
+    );
+    _mutateExercise(exIndex, (e) => e.copyWith(sets: [...e.sets, newSet]));
+    _save();
+  }
+
+  void setExerciseNote(int exIndex, String note) =>
+      _mutateExercise(exIndex, (e) => e.copyWith(note: note));
+
+  // ---------- Descanso ----------
+  void startRest(int seconds) =>
+      state = state.copyWith(restRemaining: seconds, restTotal: seconds);
+  void addRest(int delta) => state = state.copyWith(
+      restRemaining: (state.restRemaining + delta).clamp(0, 3600));
+  void skipRest() => state = state.copyWith(restRemaining: 0);
+
+  // ---------- Pausar / retomar ----------
+  Future<void> pause() async {
+    final s = state.session;
+    if (s == null) return;
+    state = state.copyWith(session: s.copyWith(status: SessionStatus.paused));
+    await _save();
+  }
+
+  Future<void> resume() async {
+    final s = state.session;
+    if (s == null) return;
+    state = state.copyWith(session: s.copyWith(status: SessionStatus.active));
+    await _save();
+  }
+
+  // ---------- Finalizar ----------
+  Future<WorkoutSummary?> finish({
+    WorkoutMood? mood,
+    int? energy,
+    String? notes,
+  }) async {
+    final s = state.session;
+    if (s == null) return null;
+    _ticker?.cancel();
+    final withMeta = s.copyWith(mood: mood, energy: energy, notes: notes);
+    final summary =
+        await ref.read(workoutSessionRepositoryProvider).finish(withMeta);
+    state = state.copyWith(session: summary.session, restRemaining: 0);
+    return summary;
+  }
+
+  Future<void> discard() async {
+    _ticker?.cancel();
+    await ref.read(workoutSessionRepositoryProvider).clearActive();
+    state = const SessionState();
+  }
+
+  // ---------- Helpers ----------
+  Future<void> _save() async {
+    final s = state.session;
+    if (s == null || s.isFinished) return;
+    await ref.read(workoutSessionRepositoryProvider).saveActive(s);
+  }
+
+  void _mutateSet(
+    int exIndex,
+    int setIndex,
+    WorkoutSetSession Function(WorkoutSetSession) fn,
+  ) {
+    _mutateExercise(exIndex, (e) {
+      final sets = [...e.sets];
+      sets[setIndex] = fn(sets[setIndex]);
+      return e.copyWith(sets: sets);
+    });
+  }
+
+  void _mutateExercise(
+    int exIndex,
+    WorkoutExerciseSession Function(WorkoutExerciseSession) fn,
+  ) {
+    final s = state.session;
+    if (s == null) return;
+    final exercises = [...s.exercises];
+    exercises[exIndex] = fn(exercises[exIndex]);
+    state = state.copyWith(session: s.copyWith(exercises: exercises));
+  }
+}
+DARTEOF_SESSIONCTRL
+
+echo "    - lib/features/workout_session/repositories/workout_session_repository.dart"
+cat > lib/features/workout_session/repositories/workout_session_repository.dart <<'DARTEOF_SESSIONREPO'
+import '../models/workout_session.dart';
+import '../models/workout_summary.dart';
+
+/// Contrato do repositório da sessão de treino (PROMPT 06).
+///
+/// Offline-first: a sessão ativa é persistida para sobreviver ao
+/// fechamento do app; ao finalizar, calcula PRs, grava a sessão e
+/// atualiza o histórico consumido pela Biblioteca.
+abstract interface class WorkoutSessionRepository {
+  /// Sessão ativa/pausada persistida (para retomar), ou null.
+  WorkoutSession? loadActive();
+
+  /// Autosave do progresso atual.
+  Future<void> saveActive(WorkoutSession session);
+
+  Future<void> clearActive();
+
+  /// Finaliza: computa PRs, persiste a sessão, atualiza histórico e
+  /// limpa a sessão ativa. Retorna o resumo.
+  Future<WorkoutSummary> finish(WorkoutSession session);
+
+  /// Sessões concluídas mais recentes (para Dashboard/Analytics).
+  List<WorkoutSession> recentSessions({int limit});
+
+  /// Último peso usado no exercício informado (para pré-preencher a
+  /// próxima sessão). Retorna null se nunca foi treinado.
+  double? lastWeightFor(String exerciseId);
+}
+DARTEOF_SESSIONREPO
+
+echo "    - lib/features/workout_session/data/workout_session_repository_impl.dart"
+cat > lib/features/workout_session/data/workout_session_repository_impl.dart <<'DARTEOF_SESSIONREPOIMPL'
+import '../../../core/constants/app_constants.dart';
+import '../../../core/storage/local_storage_service.dart';
+import '../../exercise/domain/exercise_user_data_store.dart';
+import '../../exercise/models/exercise_history.dart';
+import '../domain/session_enums.dart';
+import '../models/workout_pr.dart';
+import '../models/workout_session.dart';
+import '../models/workout_summary.dart';
+import '../repositories/workout_session_repository.dart';
+
+/// Implementação offline-first do [WorkoutSessionRepository].
+final class WorkoutSessionRepositoryImpl implements WorkoutSessionRepository {
+  WorkoutSessionRepositoryImpl({
+    required LocalStorageService storage,
+    required ExerciseUserDataStore exerciseStore,
+    required String? Function() currentUserId,
+  })  : _storage = storage,
+        _exerciseStore = exerciseStore,
+        _currentUserId = currentUserId;
+
+  final LocalStorageService _storage;
+  final ExerciseUserDataStore _exerciseStore;
+  final String? Function() _currentUserId;
+
+  String get _uid => _currentUserId() ?? 'local';
+  String get _box => AppConstants.boxWorkouts;
+  String get _activeKey => 'active_session_$_uid';
+  String get _sessionsKey => 'sessions_$_uid';
+
+  @override
+  WorkoutSession? loadActive() {
+    final raw = _storage.get<Map<dynamic, dynamic>>(_box, _activeKey);
+    if (raw == null) return null;
+    final session = WorkoutSession.fromMap(Map<String, dynamic>.from(raw));
+    return session.isFinished ? null : session;
+  }
+
+  @override
+  Future<void> saveActive(WorkoutSession session) =>
+      _storage.put(_box, _activeKey, session.toMap());
+
+  @override
+  Future<void> clearActive() => _storage.delete(_box, _activeKey);
+
+  @override
+  Future<WorkoutSummary> finish(WorkoutSession session) async {
+    final finished = session.copyWith(
+      status: SessionStatus.finished,
+      finishedAt: DateTime.now(),
+    );
+
+    final history = {..._exerciseStore.history(_uid)};
+    final prs = <WorkoutPR>[];
+
+    for (final ex in finished.exercises) {
+      if (ex.completedSets == 0) continue;
+      final prev = history[ex.exercise.id];
+      final newMaxWeight = ex.maxWeight;
+      final newMaxReps = ex.maxReps;
+      final newVolume = ex.volume;
+
+      // Detecção de PRs (comparado ao histórico anterior).
+      if (newMaxWeight != null &&
+          newMaxWeight > (prev?.maxWeight ?? 0)) {
+        prs.add(WorkoutPR(
+          exerciseId: ex.exercise.id,
+          exerciseName: ex.exercise.name,
+          kind: PRKind.maxWeight,
+          value: newMaxWeight,
+        ));
+      }
+      if (newVolume > (prev?.maxVolume ?? 0)) {
+        prs.add(WorkoutPR(
+          exerciseId: ex.exercise.id,
+          exerciseName: ex.exercise.name,
+          kind: PRKind.maxVolume,
+          value: newVolume,
+        ));
+      }
+      if (newMaxReps != null && newMaxReps > (prev?.maxReps ?? 0)) {
+        prs.add(WorkoutPR(
+          exerciseId: ex.exercise.id,
+          exerciseName: ex.exercise.name,
+          kind: PRKind.maxReps,
+          value: newMaxReps.toDouble(),
+        ));
+      }
+
+      // Atualiza o histórico agregado (nunca reduz os máximos).
+      history[ex.exercise.id] = ExerciseHistorySummary(
+        exerciseId: ex.exercise.id,
+        lastPerformedAt: finished.finishedAt,
+        maxWeight: _max(prev?.maxWeight, newMaxWeight),
+        maxVolume: _max(prev?.maxVolume, newVolume),
+        maxReps: _maxInt(prev?.maxReps, newMaxReps),
+        timesPerformed: (prev?.timesPerformed ?? 0) + 1,
+        lastNote: ex.note ?? prev?.lastNote,
+      );
+    }
+
+    await _exerciseStore.writeHistory(_uid, history);
+    await _appendSession(finished);
+    await clearActive();
+
+    return WorkoutSummary(
+      session: finished,
+      stats: WorkoutStats.fromSession(finished),
+      personalRecords: prs,
+    );
+  }
+
+  @override
+  List<WorkoutSession> recentSessions({int limit = 20}) {
+    final raw = _storage.get<List<dynamic>>(_box, _sessionsKey) ?? const [];
+    final list = raw
+        .whereType<Map<dynamic, dynamic>>()
+        .map((e) => WorkoutSession.fromMap(Map<String, dynamic>.from(e)))
+        .toList()
+      ..sort((a, b) =>
+          (b.finishedAt ?? b.startedAt).compareTo(a.finishedAt ?? a.startedAt));
+    return list.take(limit).toList();
+  }
+
+  @override
+  double? lastWeightFor(String exerciseId) {
+    for (final session in recentSessions(limit: 40)) {
+      for (final ex in session.exercises) {
+        if (ex.exercise.id != exerciseId) continue;
+        for (final set in ex.sets.reversed) {
+          final w = set.weight;
+          if (w != null && w > 0) return w;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _appendSession(WorkoutSession session) async {
+    final raw = _storage.get<List<dynamic>>(_box, _sessionsKey) ?? const [];
+    final list = [session.toMap(), ...raw].take(100).toList();
+    await _storage.put(_box, _sessionsKey, list);
+  }
+
+  double? _max(double? a, double? b) {
+    if (a == null) return b;
+    if (b == null) return a;
+    return a > b ? a : b;
+  }
+
+  int? _maxInt(int? a, int? b) {
+    if (a == null) return b;
+    if (b == null) return a;
+    return a > b ? a : b;
+  }
+}
+DARTEOF_SESSIONREPOIMPL
+
+echo "    - lib/features/body_progress/presentation/body_progress_screen.dart"
+cat > lib/features/body_progress/presentation/body_progress_screen.dart <<'DARTEOF_BODYSCREEN'
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../widgets/graphs_tab.dart';
+import '../widgets/measurements_tab.dart';
+import '../widgets/photos_tab.dart';
+import '../widgets/weight_tab.dart';
+
+/// Evolução corporal — peso, medidas, fotos e gráficos (PROMPT 08).
+class BodyProgressScreen extends StatelessWidget {
+  const BodyProgressScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 4,
+      child: Scaffold(
+        appBar: VisAppBar(
+          title: 'Evolução',
+          accent: AppColors.secondary,
+          actions: [
+            IconButton(
+              tooltip: 'Estatísticas',
+              icon: const Icon(LucideIcons.barChart3),
+              onPressed: () => context.pushNamed('analytics'),
+            ),
+          ],
+          bottom: const TabBar(
+            isScrollable: true,
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white70,
+            indicatorColor: Colors.white,
+            tabs: [
+              Tab(text: 'Peso'),
+              Tab(text: 'Medidas'),
+              Tab(text: 'Fotos'),
+              Tab(text: 'Gráficos'),
+            ],
+          ),
+        ),
+        body: const TabBarView(
+          children: [
+            WeightTab(),
+            MeasurementsTab(),
+            PhotosTab(),
+            GraphsTab(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+DARTEOF_BODYSCREEN
+
 echo "    - lib/features/photo_analysis/services/photo_capture_service.dart"
 cat > lib/features/photo_analysis/services/photo_capture_service.dart <<'DARTEOF_PHOTOCAPT'
 import 'dart:convert';
@@ -3911,7 +4949,8 @@ class PhotosGalleryScreen extends ConsumerWidget {
     final photos = ref.watch(photoControllerProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Fotos de progresso')),
+      appBar: const VisAppBar(
+          title: 'Fotos de progresso', accent: AppColors.accentTeal),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addSheet(context, ref),
         icon: const Icon(LucideIcons.camera),
@@ -4075,6 +5114,90 @@ class _PoseSection extends StatelessWidget {
 }
 DARTEOF_PHOTOGAL
 
+echo "    - lib/features/photo_analysis/presentation/photo_compare_screen.dart"
+cat > lib/features/photo_analysis/presentation/photo_compare_screen.dart <<'DARTEOF_PHOTOCOMPARE'
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../../body_progress/domain/body_enums.dart';
+import '../providers/photo_providers.dart';
+import '../widgets/before_after_slider.dart';
+
+/// Comparação antes/depois de uma pose (PROMPT 13).
+class PhotoCompareScreen extends ConsumerWidget {
+  const PhotoCompareScreen({required this.pose, super.key});
+
+  final PhotoType pose;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Considera apenas fotos com imagem disponível localmente, para que
+    // `first`/`last` sejam sempre válidas no slider (evita null-check crash).
+    // Considera só fotos com imagem realmente exibível (data URL ou http).
+    // Fotos antigas salvas como caminho de arquivo/blob não renderizam na web.
+    bool renderable(String? p) =>
+        p != null && (p.startsWith('data:') || p.startsWith('http'));
+    final photos = ref
+        .watch(photoControllerProvider)
+        .where((p) => p.type == pose && renderable(p.displayPath))
+        .toList()
+      ..sort((a, b) => a.takenAt.compareTo(b.takenAt));
+
+    return Scaffold(
+      appBar: AppBar(title: Text('Comparar · ${pose.label}')),
+      body: photos.length < 2
+          ? const EmptyState(
+              icon: LucideIcons.arrowLeftRight,
+              title: 'Fotos insuficientes',
+              description: 'Adicione ao menos duas fotos desta pose.',
+            )
+          : ListView(
+              padding: const EdgeInsets.all(AppSpacing.l),
+              children: [
+                BeforeAfterSlider(
+                  beforePath: photos.first.displayPath!,
+                  afterPath: photos.last.displayPath!,
+                ),
+                const SizedBox(height: AppSpacing.m),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(_date(photos.first.takenAt),
+                        style: AppTypography.small),
+                    Text(_date(photos.last.takenAt),
+                        style: AppTypography.small),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.l),
+                CardContainer(
+                  child: Row(
+                    children: [
+                      const Icon(LucideIcons.sparkles, color: null, size: 18),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'A análise por IA (definição, simetria, evolução por '
+                          'região) será gerada aqui após o upload das fotos.',
+                          style: AppTypography.small,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  String _date(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+}
+DARTEOF_PHOTOCOMPARE
+
 echo "    - lib/features/photo_analysis/widgets/before_after_slider.dart"
 cat > lib/features/photo_analysis/widgets/before_after_slider.dart <<'DARTEOF_BASLIDER'
 import 'package:flutter/material.dart';
@@ -4084,7 +5207,9 @@ import '../../../shared/widgets/media/progress_photo_view.dart';
 
 /// Slider de comparação antes/depois (PROMPT 13).
 ///
-/// Revela a foto "antes" sobre a "depois" conforme o controle desliza.
+/// A foto "antes" é revelada sobre a "depois" conforme o controle desliza.
+/// Usa um recorte por fração (CustomClipper) para funcionar de forma
+/// consistente também na web.
 class BeforeAfterSlider extends StatefulWidget {
   const BeforeAfterSlider({
     required this.beforePath,
@@ -4113,30 +5238,29 @@ class _BeforeAfterSliderState extends State<BeforeAfterSlider> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final w = constraints.maxWidth;
-                final h = constraints.maxHeight;
+                final v = _value.clamp(0.0, 1.0);
                 return Stack(
-                  fit: StackFit.expand,
                   children: [
-                    ProgressPhotoView(
-                      source: widget.afterPath,
-                      width: w,
-                      height: h,
-                      fit: BoxFit.cover,
+                    // Base: foto "depois" ocupa todo o espaço.
+                    Positioned.fill(
+                      child: ProgressPhotoView(
+                        source: widget.afterPath,
+                        fit: BoxFit.cover,
+                      ),
                     ),
-                    ClipRect(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: _value.clamp(0.0, 1.0),
+                    // Topo: foto "antes", recortada à fração da esquerda.
+                    Positioned.fill(
+                      child: ClipRect(
+                        clipper: _LeftRevealClipper(v),
                         child: ProgressPhotoView(
                           source: widget.beforePath,
-                          width: w,
-                          height: h,
                           fit: BoxFit.cover,
                         ),
                       ),
                     ),
+                    // Linha divisória.
                     Positioned(
-                      left: (w * _value) - 1,
+                      left: (w * v) - 1,
                       top: 0,
                       bottom: 0,
                       child: Container(width: 2, color: Colors.white),
@@ -4161,6 +5285,19 @@ class _BeforeAfterSliderState extends State<BeforeAfterSlider> {
       ],
     );
   }
+}
+
+/// Recorta o widget à fração [fraction] da largura (a partir da esquerda).
+class _LeftRevealClipper extends CustomClipper<Rect> {
+  const _LeftRevealClipper(this.fraction);
+  final double fraction;
+
+  @override
+  Rect getClip(Size size) =>
+      Rect.fromLTWH(0, 0, size.width * fraction, size.height);
+
+  @override
+  bool shouldReclip(_LeftRevealClipper old) => old.fraction != fraction;
 }
 DARTEOF_BASLIDER
 
