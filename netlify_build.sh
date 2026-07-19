@@ -4329,6 +4329,12 @@ class _ExerciseList extends ConsumerWidget {
                 ],
               ),
               Text(ex.exercise.muscleGroup, style: AppTypography.small),
+              const SizedBox(height: 6),
+              _ExerciseNoteField(
+                key: ValueKey('note_${ex.id}'),
+                initial: ex.note ?? '',
+                onChanged: (v) => c.setExerciseNote(exIndex, v),
+              ),
               const SizedBox(height: 8),
               for (var i = 0; i < ex.sets.length; i++)
                 SessionSetRow(
@@ -4350,6 +4356,49 @@ class _ExerciseList extends ConsumerWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Campo de anotações do exercício (mantém o controller entre rebuilds da
+/// lista, que acontecem a cada segundo do cronômetro).
+class _ExerciseNoteField extends StatefulWidget {
+  const _ExerciseNoteField({
+    required this.initial,
+    required this.onChanged,
+    super.key,
+  });
+
+  final String initial;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_ExerciseNoteField> createState() => _ExerciseNoteFieldState();
+}
+
+class _ExerciseNoteFieldState extends State<_ExerciseNoteField> {
+  late final TextEditingController _c =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _c,
+      onChanged: widget.onChanged,
+      minLines: 1,
+      maxLines: 3,
+      style: AppTypography.small,
+      decoration: const InputDecoration(
+        isDense: true,
+        prefixIcon: Icon(LucideIcons.pencil, size: 16),
+        hintText: 'Anotações (ex.: altura do banco, pegada…)',
+      ),
     );
   }
 }
@@ -4468,11 +4517,14 @@ class WorkoutSessionController extends Notifier<SessionState> {
     final uid = ref.read(authenticationRepositoryProvider).currentUser?.id ?? '';
     final repo = ref.read(workoutSessionRepositoryProvider);
     final exercises = day.exercises.map((we) {
-      // Pré-preenche com o último peso usado neste exercício (se houver).
+      // Pré-preenche com peso, repetições e anotação do último treino.
       final lastWeight = repo.lastWeightFor(we.exercise.id);
+      final lastReps = repo.lastRepsFor(we.exercise.id);
+      final lastNote = repo.lastNoteFor(we.exercise.id);
       return WorkoutExerciseSession(
         id: _newId(),
         exercise: we.exercise,
+        note: lastNote,
         sets: we.sets
             .map((ps) => WorkoutSetSession(
                   id: _newId(),
@@ -4481,6 +4533,7 @@ class WorkoutSessionController extends Notifier<SessionState> {
                   targetReps: ps.targetReps,
                   restSeconds: ps.restSeconds,
                   weight: lastWeight,
+                  reps: lastReps,
                 ))
             .toList(),
       );
@@ -4651,6 +4704,12 @@ abstract interface class WorkoutSessionRepository {
   /// Último peso usado no exercício informado (para pré-preencher a
   /// próxima sessão). Retorna null se nunca foi treinado.
   double? lastWeightFor(String exerciseId);
+
+  /// Últimas repetições registradas no exercício informado.
+  int? lastRepsFor(String exerciseId);
+
+  /// Última anotação salva para o exercício (ex.: altura do banco).
+  String? lastNoteFor(String exerciseId);
 }
 DARTEOF_SESSIONREPO
 
@@ -4788,6 +4847,32 @@ final class WorkoutSessionRepositoryImpl implements WorkoutSessionRepository {
           final w = set.weight;
           if (w != null && w > 0) return w;
         }
+      }
+    }
+    return null;
+  }
+
+  @override
+  int? lastRepsFor(String exerciseId) {
+    for (final session in recentSessions(limit: 40)) {
+      for (final ex in session.exercises) {
+        if (ex.exercise.id != exerciseId) continue;
+        for (final set in ex.sets.reversed) {
+          final r = set.reps;
+          if (r != null && r > 0) return r;
+        }
+      }
+    }
+    return null;
+  }
+
+  @override
+  String? lastNoteFor(String exerciseId) {
+    for (final session in recentSessions(limit: 40)) {
+      for (final ex in session.exercises) {
+        if (ex.exercise.id != exerciseId) continue;
+        final n = ex.note;
+        if (n != null && n.trim().isNotEmpty) return n;
       }
     }
     return null;
