@@ -4872,6 +4872,210 @@ class BodyProgressScreen extends StatelessWidget {
 }
 DARTEOF_BODYSCREEN
 
+echo "    - lib/features/body_progress/repositories/body_progress_repository.dart"
+cat > lib/features/body_progress/repositories/body_progress_repository.dart <<'DARTEOF_BODYREPO'
+import '../domain/body_enums.dart';
+import '../models/body_goal.dart';
+import '../models/body_photo.dart';
+import '../models/measurement_record.dart';
+import '../models/weight_record.dart';
+
+/// Contrato do repositório de evolução corporal (PROMPT 08).
+///
+/// Regra 001/003: nada é sobrescrito — cada registro é novo e datado.
+/// Offline-first.
+abstract interface class BodyProgressRepository {
+  // ----- Peso -----
+  Future<void> addWeight(WeightRecord record);
+  List<WeightRecord> weightHistory();
+  WeightRecord? latestWeight();
+
+  // ----- Medidas -----
+  Future<void> addMeasurement(MeasurementRecord record);
+  List<MeasurementRecord> measurementHistory();
+  MeasurementRecord? latestMeasurement();
+
+  // ----- Fotos -----
+  Future<void> addPhoto(BodyPhoto photo);
+  List<BodyPhoto> photos({PhotoType? type});
+  Future<void> removePhoto(String id);
+
+  // ----- Metas -----
+  Future<void> addGoal(BodyGoal goal);
+  List<BodyGoal> goals();
+  Future<void> removeGoal(String id);
+}
+DARTEOF_BODYREPO
+
+echo "    - lib/features/body_progress/data/body_progress_repository_impl.dart"
+cat > lib/features/body_progress/data/body_progress_repository_impl.dart <<'DARTEOF_BODYREPOIMPL'
+import '../domain/body_enums.dart';
+import '../domain/body_progress_local_store.dart';
+import '../models/body_goal.dart';
+import '../models/body_photo.dart';
+import '../models/measurement_record.dart';
+import '../models/weight_record.dart';
+import '../repositories/body_progress_repository.dart';
+
+/// Implementação offline-first do [BodyProgressRepository].
+final class BodyProgressRepositoryImpl implements BodyProgressRepository {
+  BodyProgressRepositoryImpl({
+    required BodyProgressLocalStore store,
+    required String? Function() currentUserId,
+  })  : _store = store,
+        _currentUserId = currentUserId;
+
+  final BodyProgressLocalStore _store;
+  final String? Function() _currentUserId;
+
+  String get _uid => _currentUserId() ?? 'local';
+
+  static const _weight = 'weight';
+  static const _measurements = 'measurements';
+  static const _photos = 'photos';
+  static const _goals = 'goals';
+
+  // ----- Peso -----
+  @override
+  Future<void> addWeight(WeightRecord record) async {
+    final list = _store.read(_uid, _weight)..add(record.toMap());
+    await _store.write(_uid, _weight, list);
+  }
+
+  @override
+  List<WeightRecord> weightHistory() {
+    final list = _store.read(_uid, _weight).map(WeightRecord.fromMap).toList()
+      ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    return list;
+  }
+
+  @override
+  WeightRecord? latestWeight() {
+    final h = weightHistory();
+    return h.isEmpty ? null : h.first;
+  }
+
+  // ----- Medidas -----
+  @override
+  Future<void> addMeasurement(MeasurementRecord record) async {
+    final list = _store.read(_uid, _measurements)..add(record.toMap());
+    await _store.write(_uid, _measurements, list);
+  }
+
+  @override
+  List<MeasurementRecord> measurementHistory() {
+    final list = _store
+        .read(_uid, _measurements)
+        .map(MeasurementRecord.fromMap)
+        .toList()
+      ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    return list;
+  }
+
+  @override
+  MeasurementRecord? latestMeasurement() {
+    final h = measurementHistory();
+    return h.isEmpty ? null : h.first;
+  }
+
+  // ----- Fotos -----
+  @override
+  Future<void> addPhoto(BodyPhoto photo) async {
+    final list = _store.read(_uid, _photos)..add(photo.toMap());
+    await _store.write(_uid, _photos, list);
+  }
+
+  @override
+  List<BodyPhoto> photos({PhotoType? type}) {
+    final list = _store.read(_uid, _photos).map(BodyPhoto.fromMap).toList()
+      ..sort((a, b) => b.takenAt.compareTo(a.takenAt));
+    return type == null ? list : list.where((p) => p.type == type).toList();
+  }
+
+  @override
+  Future<void> removePhoto(String id) async {
+    final list = _store.read(_uid, _photos)
+      ..removeWhere((m) => m['id'] == id);
+    await _store.write(_uid, _photos, list);
+  }
+
+  // ----- Metas -----
+  @override
+  Future<void> addGoal(BodyGoal goal) async {
+    final list = _store.read(_uid, _goals)..add(goal.toMap());
+    await _store.write(_uid, _goals, list);
+  }
+
+  @override
+  List<BodyGoal> goals() =>
+      _store.read(_uid, _goals).map(BodyGoal.fromMap).toList();
+
+  @override
+  Future<void> removeGoal(String id) async {
+    final list = _store.read(_uid, _goals)
+      ..removeWhere((m) => m['id'] == id);
+    await _store.write(_uid, _goals, list);
+  }
+}
+DARTEOF_BODYREPOIMPL
+
+echo "    - lib/features/photo_analysis/controllers/photo_controller.dart"
+cat > lib/features/photo_analysis/controllers/photo_controller.dart <<'DARTEOF_PHOTOCTRL'
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../authentication/providers/authentication_providers.dart';
+import '../../body_progress/domain/body_enums.dart';
+import '../../body_progress/models/body_photo.dart';
+import '../../body_progress/providers/body_progress_providers.dart';
+import '../providers/photo_providers.dart';
+import '../services/photo_capture_service.dart';
+
+/// Controller das fotos de progresso (PROMPT 13).
+///
+/// Usa o repositório de evolução corporal (módulo 08) para persistência.
+class PhotoController extends Notifier<List<BodyPhoto>> {
+  final Uuid _uuid = const Uuid();
+
+  @override
+  List<BodyPhoto> build() =>
+      ref.read(bodyProgressRepositoryProvider).photos();
+
+  List<BodyPhoto> ofType(PhotoType type) =>
+      state.where((p) => p.type == type).toList();
+
+  /// Remove uma foto (exige confirmação na tela).
+  Future<void> remove(String id) async {
+    await ref.read(bodyProgressRepositoryProvider).removePhoto(id);
+    state = ref.read(bodyProgressRepositoryProvider).photos();
+  }
+
+  /// Captura (câmera/galeria) e registra a foto na pose informada.
+  /// Retorna `false` se o usuário cancelar a captura.
+  Future<bool> capture({
+    required PhotoType type,
+    required PhotoSourceKind source,
+  }) async {
+    final path = await ref.read(photoCaptureServiceProvider).capture(source);
+    if (path == null) return false;
+
+    final uid =
+        ref.read(authenticationRepositoryProvider).currentUser?.id ?? '';
+    await ref.read(bodyProgressRepositoryProvider).addPhoto(
+          BodyPhoto(
+            id: _uuid.v4(),
+            userId: uid,
+            type: type,
+            takenAt: DateTime.now(),
+            localPath: path,
+          ),
+        );
+    state = ref.read(bodyProgressRepositoryProvider).photos();
+    return true;
+  }
+}
+DARTEOF_PHOTOCTRL
+
 echo "    - lib/features/photo_analysis/services/photo_capture_service.dart"
 cat > lib/features/photo_analysis/services/photo_capture_service.dart <<'DARTEOF_PHOTOCAPT'
 import 'dart:convert';
@@ -4969,8 +5173,8 @@ class PhotosGalleryScreen extends ConsumerWidget {
                 for (final pose in _poses)
                   _PoseSection(
                     pose: pose,
-                    photos:
-                        photos.where((p) => p.type == pose).toList(),
+                    photos: photos.where((p) => p.type == pose).toList(),
+                    onDelete: (ctx, p) => _confirmDelete(ctx, ref, p),
                   ),
               ],
             ),
@@ -5034,6 +5238,23 @@ class PhotosGalleryScreen extends ConsumerWidget {
     );
   }
 
+  Future<void> _confirmDelete(
+    BuildContext context,
+    WidgetRef ref,
+    BodyPhoto photo,
+  ) async {
+    final ok = await ConfirmationDialog.show(
+      context,
+      title: 'Apagar foto?',
+      message: 'Esta foto será removida da sua evolução. Não é possível desfazer.',
+      confirmLabel: 'Apagar',
+      danger: true,
+    );
+    if (ok) {
+      await ref.read(photoControllerProvider.notifier).remove(photo.id);
+    }
+  }
+
   Future<void> _capture(
     BuildContext ctx,
     WidgetRef ref,
@@ -5057,9 +5278,14 @@ class PhotosGalleryScreen extends ConsumerWidget {
 }
 
 class _PoseSection extends StatelessWidget {
-  const _PoseSection({required this.pose, required this.photos});
+  const _PoseSection({
+    required this.pose,
+    required this.photos,
+    required this.onDelete,
+  });
   final PhotoType pose;
   final List<BodyPhoto> photos;
+  final void Function(BuildContext, BodyPhoto) onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -5088,21 +5314,41 @@ class _PoseSection extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               itemCount: photos.length,
               separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.s),
-              itemBuilder: (_, i) {
+              itemBuilder: (ctx, i) {
                 final p = photos[i];
-                return ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: p.displayPath != null
-                      ? ProgressPhotoView(
-                          source: p.displayPath!,
-                          width: 110,
-                          height: 140,
-                        )
-                      : Container(
-                          width: 110,
-                          height: 140,
-                          color: AppColors.card,
+                return Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: p.displayPath != null
+                          ? ProgressPhotoView(
+                              source: p.displayPath!,
+                              width: 110,
+                              height: 140,
+                            )
+                          : Container(
+                              width: 110,
+                              height: 140,
+                              color: AppColors.card,
+                            ),
+                    ),
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: GestureDetector(
+                        onTap: () => onDelete(ctx, p),
+                        child: Container(
+                          padding: const EdgeInsets.all(5),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Icon(LucideIcons.trash2,
+                              size: 16, color: Colors.white),
                         ),
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
@@ -5300,6 +5546,468 @@ class _LeftRevealClipper extends CustomClipper<Rect> {
   bool shouldReclip(_LeftRevealClipper old) => old.fraction != fraction;
 }
 DARTEOF_BASLIDER
+
+echo "    - lib/features/analytics/data/analytics_service.dart"
+cat > lib/features/analytics/data/analytics_service.dart <<'DARTEOF_ANALYTICSSVC'
+import '../../body_progress/repositories/body_progress_repository.dart';
+import '../../cardio/repositories/cardio_repository.dart';
+import '../../workout_session/models/workout_session.dart';
+import '../../workout_session/repositories/workout_session_repository.dart';
+import '../../../core/utils/date_utils.dart';
+import '../domain/analytics_enums.dart';
+import '../models/analytics_report.dart';
+
+/// Motor de estatísticas (PROMPT 16).
+///
+/// Consolida dados já registrados (treino, cardio, peso) em relatórios por
+/// período. Determinístico e sem efeitos colaterais — `now` é injetável
+/// para testes. Cardio e peso são opcionais: o relatório funciona só com
+/// as sessões de treino.
+final class AnalyticsService {
+  AnalyticsService({
+    required WorkoutSessionRepository sessionRepository,
+    CardioRepository? cardioRepository,
+    BodyProgressRepository? bodyRepository,
+    DateTime Function()? now,
+  })  : _sessions = sessionRepository,
+        _cardio = cardioRepository,
+        _body = bodyRepository,
+        _now = now ?? DateTime.now;
+
+  final WorkoutSessionRepository _sessions;
+  final CardioRepository? _cardio;
+  final BodyProgressRepository? _body;
+  final DateTime Function() _now;
+
+  DateTime _sessionDate(WorkoutSession s) =>
+      dateOnly(s.finishedAt ?? s.startedAt);
+
+  AnalyticsReport buildReport(AnalyticsPeriod period) {
+    final today = dateOnly(_now());
+    final DateTime? from = period.days == null
+        ? null
+        : today.subtract(Duration(days: period.days! - 1));
+
+    bool inWindow(DateTime d) => from == null || !d.isBefore(from);
+
+    final sessions = _sessions
+        .recentSessions(limit: 1000)
+        .where((s) => inWindow(_sessionDate(s)))
+        .toList();
+
+    final activeDays = sessions.map(_sessionDate).toSet().length;
+    var volume = 0.0;
+    var sets = 0;
+    var minutes = 0;
+    for (final s in sessions) {
+      volume += s.totalVolume;
+      sets += s.completedSets;
+      minutes += (s.elapsedSeconds / 60).round();
+    }
+
+    return AnalyticsReport(
+      period: period,
+      workouts: sessions.length,
+      activeDays: activeDays,
+      totalVolume: volume,
+      totalSets: sets,
+      totalMinutes: minutes,
+      weeklyFrequency: _weeklyFrequency(sessions, period, today),
+      muscleDistribution: _muscleDistribution(sessions),
+      personalRecords: _personalRecords(sessions),
+      volumeTrend: _volumeTrend(sessions, period, today, from),
+      cardio: _cardioSummary(inWindow),
+      weight: _weightTrend(inWindow),
+    );
+  }
+
+  double _weeklyFrequency(
+    List<WorkoutSession> sessions,
+    AnalyticsPeriod period,
+    DateTime today,
+  ) {
+    if (sessions.isEmpty) return 0;
+    var weeks = period.weeks;
+    if (weeks == null) {
+      // "Tudo": usa o intervalo real entre o primeiro treino e hoje.
+      final earliest = sessions.map(_sessionDate).reduce(
+            (a, b) => a.isBefore(b) ? a : b,
+          );
+      final spanDays = today.difference(earliest).inDays + 1;
+      weeks = spanDays / 7;
+    }
+    if (weeks < 1) weeks = 1;
+    return sessions.length / weeks;
+  }
+
+  /// Distribuição por músculo baseada no NÚMERO DE SÉRIES realizadas
+  /// (não no peso). Assim o percentual reflete a atenção dada a cada
+  /// grupo — cargas altas de perna não distorcem o resultado. O campo
+  /// `volume` carrega a contagem de séries.
+  List<MuscleDistribution> _muscleDistribution(List<WorkoutSession> sessions) {
+    final setsByMuscle = <String, int>{};
+    var totalSets = 0;
+    for (final s in sessions) {
+      for (final e in s.exercises) {
+        final g = e.exercise.muscleGroup;
+        if (g.isEmpty) continue;
+        final done =
+            e.sets.where((x) => x.completed && !x.isWarmup).length;
+        if (done == 0) continue;
+        setsByMuscle[g] = (setsByMuscle[g] ?? 0) + done;
+        totalSets += done;
+      }
+    }
+    final entries = setsByMuscle.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return [
+      for (final e in entries)
+        MuscleDistribution(
+          muscle: e.key,
+          volume: e.value.toDouble(),
+          percent: totalSets > 0 ? e.value / totalSets : 0,
+        ),
+    ];
+  }
+
+  /// Recordes por exercício: maior carga concluída (não aquecimento),
+  /// melhor volume de série e 1RM estimado (Epley).
+  List<PersonalRecord> _personalRecords(List<WorkoutSession> sessions) {
+    final best = <String, PersonalRecord>{};
+    for (final s in sessions) {
+      final date = _sessionDate(s);
+      for (final e in s.exercises) {
+        for (final set in e.sets) {
+          if (!set.completed || set.isWarmup) continue;
+          final w = set.weight;
+          final r = set.reps;
+          if (w == null || w <= 0 || r == null || r <= 0) continue;
+          final setVolume = w * r;
+          final oneRm = w * (1 + r / 30);
+          final current = best[e.exercise.id];
+          if (current == null || w > current.maxWeight) {
+            best[e.exercise.id] = PersonalRecord(
+              exerciseId: e.exercise.id,
+              exerciseName: e.exercise.name,
+              muscleGroup: e.exercise.muscleGroup,
+              maxWeight: w,
+              repsAtMaxWeight: r,
+              bestSetVolume:
+                  current == null ? setVolume : (setVolume > current.bestSetVolume ? setVolume : current.bestSetVolume),
+              estimatedOneRm: oneRm,
+              achievedAt: date,
+            );
+          } else if (setVolume > current.bestSetVolume) {
+            best[e.exercise.id] = PersonalRecord(
+              exerciseId: current.exerciseId,
+              exerciseName: current.exerciseName,
+              muscleGroup: current.muscleGroup,
+              maxWeight: current.maxWeight,
+              repsAtMaxWeight: current.repsAtMaxWeight,
+              bestSetVolume: setVolume,
+              estimatedOneRm: current.estimatedOneRm,
+              achievedAt: current.achievedAt,
+            );
+          }
+        }
+      }
+    }
+    final list = best.values.toList()
+      ..sort((a, b) => b.estimatedOneRm.compareTo(a.estimatedOneRm));
+    return list;
+  }
+
+  /// Série temporal de volume, com granularidade adequada ao período.
+  List<TrendPoint> _volumeTrend(
+    List<WorkoutSession> sessions,
+    AnalyticsPeriod period,
+    DateTime today,
+    DateTime? from,
+  ) {
+    if (sessions.isEmpty) return const [];
+
+    switch (period) {
+      case AnalyticsPeriod.week:
+        return _dailyTrend(sessions, today, 7);
+      case AnalyticsPeriod.month:
+        return _weeklyTrend(sessions, today, 5);
+      case AnalyticsPeriod.quarter:
+        return _weeklyTrend(sessions, today, 13);
+      case AnalyticsPeriod.year:
+      case AnalyticsPeriod.all:
+        return _monthlyTrend(sessions, today, 12);
+    }
+  }
+
+  List<TrendPoint> _dailyTrend(
+    List<WorkoutSession> sessions,
+    DateTime today,
+    int days,
+  ) {
+    const weekdays = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+    final points = <TrendPoint>[];
+    for (var i = days - 1; i >= 0; i--) {
+      final day = today.subtract(Duration(days: i));
+      final vol = sessions
+          .where((s) => _sessionDate(s) == day)
+          .fold(0.0, (sum, s) => sum + s.totalVolume);
+      points.add(TrendPoint(label: weekdays[day.weekday - 1], value: vol));
+    }
+    return points;
+  }
+
+  List<TrendPoint> _weeklyTrend(
+    List<WorkoutSession> sessions,
+    DateTime today,
+    int weeks,
+  ) {
+    final points = <TrendPoint>[];
+    // Semana termina hoje; blocos de 7 dias para trás.
+    for (var i = weeks - 1; i >= 0; i--) {
+      final end = today.subtract(Duration(days: i * 7));
+      final start = end.subtract(const Duration(days: 6));
+      final vol = sessions.where((s) {
+        final d = _sessionDate(s);
+        return !d.isBefore(start) && !d.isAfter(end);
+      }).fold(0.0, (sum, s) => sum + s.totalVolume);
+      points.add(TrendPoint(label: 'S${weeks - i}', value: vol));
+    }
+    return points;
+  }
+
+  List<TrendPoint> _monthlyTrend(
+    List<WorkoutSession> sessions,
+    DateTime today,
+    int months,
+  ) {
+    const names = [
+      'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez',
+    ];
+    final points = <TrendPoint>[];
+    for (var i = months - 1; i >= 0; i--) {
+      final month = DateTime(today.year, today.month - i, 1);
+      final vol = sessions.where((s) {
+        final d = _sessionDate(s);
+        return d.year == month.year && d.month == month.month;
+      }).fold(0.0, (sum, s) => sum + s.totalVolume);
+      points.add(TrendPoint(label: names[month.month - 1], value: vol));
+    }
+    return points;
+  }
+
+  CardioSummary _cardioSummary(bool Function(DateTime) inWindow) {
+    final cardio = _cardio;
+    if (cardio == null) return const CardioSummary();
+    final list = cardio
+        .history()
+        .where((c) => inWindow(dateOnly(c.performedAt)))
+        .toList();
+    if (list.isEmpty) return const CardioSummary();
+    var minutes = 0;
+    var distance = 0.0;
+    var calories = 0.0;
+    for (final c in list) {
+      minutes += c.minutes;
+      distance += c.distanceKm ?? 0;
+      calories += c.calories ?? 0;
+    }
+    return CardioSummary(
+      sessions: list.length,
+      minutes: minutes,
+      distanceKm: distance,
+      calories: calories,
+    );
+  }
+
+  WeightTrend _weightTrend(bool Function(DateTime) inWindow) {
+    final body = _body;
+    if (body == null) return const WeightTrend();
+    // weightHistory() é ordenado do mais recente para o mais antigo.
+    final inRange = body
+        .weightHistory()
+        .where((w) => inWindow(dateOnly(w.recordedAt)))
+        .toList();
+    if (inRange.isEmpty) return const WeightTrend();
+    final end = inRange.first.weight; // mais recente
+    final start = inRange.last.weight; // mais antigo do período
+    return WeightTrend(start: start, end: end, records: inRange.length);
+  }
+}
+DARTEOF_ANALYTICSSVC
+
+echo "    - lib/features/analytics/widgets/analytics_sections.dart"
+cat > lib/features/analytics/widgets/analytics_sections.dart <<'DARTEOF_ANALYTICSSEC'
+import 'package:flutter/material.dart';
+import 'package:lucide_icons/lucide_icons.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../shared/widgets/widgets.dart';
+import '../models/analytics_report.dart';
+import 'analytics_format.dart';
+
+/// Grade de KPIs do período (treinos, volume, séries, tempo).
+class AnalyticsSummaryGrid extends StatelessWidget {
+  const AnalyticsSummaryGrid({required this.report, super.key});
+  final AnalyticsReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <Widget>[
+      MetricCard(
+        title: 'Treinos',
+        value: '${report.workouts}',
+        delta: '${report.weeklyFrequency.toStringAsFixed(1)}/semana',
+        icon: LucideIcons.dumbbell,
+      ),
+      MetricCard(
+        title: 'Volume total',
+        value: AnalyticsFormat.kg(report.totalVolume),
+        delta: '${AnalyticsFormat.kg(report.avgSessionVolume)}/treino',
+        icon: LucideIcons.trendingUp,
+      ),
+      MetricCard(
+        title: 'Séries',
+        value: '${report.totalSets}',
+        icon: LucideIcons.listChecks,
+      ),
+      MetricCard(
+        title: 'Tempo treinado',
+        value: AnalyticsFormat.minutes(report.totalMinutes),
+        delta: '${report.avgSessionMinutes.round()} min/treino',
+        icon: LucideIcons.clock,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = AppSpacing.s;
+        final width = (constraints.maxWidth - spacing) / 2;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final item in items) SizedBox(width: width, child: item),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Gráfico de tendência de volume ao longo do período.
+class VolumeTrendCard extends StatelessWidget {
+  const VolumeTrendCard({required this.report, super.key});
+  final AnalyticsReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final points = report.volumeTrend;
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Tendência de volume', style: AppTypography.subtitle),
+          const SizedBox(height: AppSpacing.s),
+          if (points.isEmpty)
+            Text('Sem dados suficientes no período.',
+                style: AppTypography.caption)
+          else ...[
+            ProgressChart(
+              points: [
+                for (var i = 0; i < points.length; i++)
+                  (x: i.toDouble(), y: points[i].value),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                for (final p in points)
+                  Expanded(
+                    child: Text(
+                      p.label,
+                      textAlign: TextAlign.center,
+                      style: AppTypography.small
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Distribuição de volume por grupo muscular (barras proporcionais).
+class MuscleDistributionCard extends StatelessWidget {
+  const MuscleDistributionCard({required this.report, super.key});
+  final AnalyticsReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = report.muscleDistribution;
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Distribuição por músculo', style: AppTypography.subtitle),
+          Text('Percentual das séries feitas em cada grupo no período.',
+              style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.s),
+          if (items.isEmpty)
+            Text('Nenhuma série registrada no período.',
+                style: AppTypography.caption)
+          else
+            for (final m in items)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.s),
+                child: _MuscleBar(item: m),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MuscleBar extends StatelessWidget {
+  const _MuscleBar({required this.item});
+  final MuscleDistribution item;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(item.muscle, style: AppTypography.small),
+            Text('${(item.percent * 100).round()}% · ${item.volume.round()} séries',
+                style: AppTypography.small
+                    .copyWith(color: AppColors.textSecondary)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: item.percent.clamp(0.0, 1.0),
+            minHeight: 8,
+            backgroundColor: AppColors.divider,
+            valueColor:
+                const AlwaysStoppedAnimation<Color>(AppColors.primary),
+          ),
+        ),
+      ],
+    );
+  }
+}
+DARTEOF_ANALYTICSSEC
 
 echo "==> Baixando dependencias e compilando…"
 flutter pub get
