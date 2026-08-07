@@ -4600,7 +4600,12 @@ class _ExerciseList extends ConsumerWidget {
       itemCount: exercises.length,
       itemBuilder: (_, exIndex) {
         final ex = exercises[exIndex];
+        // Bloco do exercício em treino ativo usa o azul principal do VIS
+        // (AppColors.primary) para diferenciar visualmente o exercício em
+        // execução — só a cor de fundo muda; tipografia, ícones,
+        // espaçamento e lógica permanecem os mesmos.
         return CardContainer(
+          color: AppColors.primary,
           padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
