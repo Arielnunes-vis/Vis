@@ -2311,26 +2311,43 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../domain/nutrition_enums.dart';
 import '../models/food_item.dart';
 import '../models/macro_nutrients.dart';
+import '../models/meal.dart';
 import '../providers/nutrition_providers.dart';
 
-/// Bottom sheet de registro manual de refeição (PROMPT 10).
+/// Bottom sheet de registro/edição de refeição (PROMPT 10 + ajustes V1).
 ///
 /// Entrada manual: você digita os valores totais do alimento (calorias e
 /// macros) que pesquisou. O app apenas soma os itens.
+///
+/// Permite escolher a data da refeição (qualquer dia passado, nunca uma
+/// data futura) e, quando [editingMeal] é informado, editar uma refeição
+/// já registrada — inclusive de um dia anterior.
 class AddMealSheet extends ConsumerStatefulWidget {
-  const AddMealSheet({super.key});
+  const AddMealSheet({this.initialDate, this.editingMeal, super.key});
 
-  static Future<void> show(BuildContext context) {
+  /// Data pré-selecionada ao criar uma refeição nova (ex.: o dia que o
+  /// usuário está visualizando na aba "Hoje"). Ignorado ao editar.
+  final DateTime? initialDate;
+
+  /// Quando informado, o sheet abre em modo de edição desta refeição.
+  final Meal? editingMeal;
+
+  static Future<void> show(
+    BuildContext context, {
+    DateTime? initialDate,
+    Meal? editingMeal,
+  }) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => const AddMealSheet(),
+      builder: (_) => AddMealSheet(initialDate: initialDate, editingMeal: editingMeal),
     );
   }
 
@@ -2340,8 +2357,12 @@ class AddMealSheet extends ConsumerStatefulWidget {
 
 class _AddMealSheetState extends ConsumerState<AddMealSheet> {
   final Uuid _uuid = const Uuid();
-  MealType _type = MealType.lunch;
-  final List<FoodItem> _items = [];
+
+  late MealType _type = widget.editingMeal?.type ?? MealType.lunch;
+  late DateTime _date = _dateOnly(
+    widget.editingMeal?.consumedAt ?? widget.initialDate ?? DateTime.now(),
+  );
+  late final List<FoodItem> _items = List.of(widget.editingMeal?.items ?? const []);
 
   final _name = TextEditingController();
   final _qty = TextEditingController(text: '100');
@@ -2349,6 +2370,10 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
   final _protein = TextEditingController();
   final _carbs = TextEditingController();
   final _fats = TextEditingController();
+
+  bool get _isEditing => widget.editingMeal != null;
+
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
   @override
   void dispose() {
@@ -2393,6 +2418,23 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
     });
   }
 
+  /// Abre o seletor de data. Nunca permite escolher uma data futura.
+  Future<void> _pickDate() async {
+    final today = _dateOnly(DateTime.now());
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(today.year - 5),
+      lastDate: today,
+      helpText: 'Data da refeição',
+      cancelText: 'Cancelar',
+      confirmText: 'OK',
+    );
+    if (picked != null) {
+      setState(() => _date = _dateOnly(picked));
+    }
+  }
+
   bool _saving = false;
 
   Future<void> _save() async {
@@ -2406,9 +2448,30 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
     }
     setState(() => _saving = true);
     try {
-      await ref
-          .read(nutritionControllerProvider.notifier)
-          .addMeal(type: _type, items: all);
+      final controller = ref.read(nutritionControllerProvider.notifier);
+      if (_isEditing) {
+        final original = widget.editingMeal!;
+        await controller.updateMeal(
+          Meal(
+            id: original.id,
+            userId: original.userId,
+            type: _type,
+            consumedAt: DateTime(
+              _date.year,
+              _date.month,
+              _date.day,
+              original.consumedAt.hour,
+              original.consumedAt.minute,
+              original.consumedAt.second,
+            ),
+            items: all,
+            photoPath: original.photoPath,
+            note: original.note,
+          ),
+        );
+      } else {
+        await controller.addMeal(type: _type, items: all, date: _date);
+      }
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (!mounted) return;
@@ -2433,7 +2496,10 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Nova refeição', style: AppTypography.subtitle),
+            Text(_isEditing ? 'Editar refeição' : 'Nova refeição',
+                style: AppTypography.subtitle),
+            const SizedBox(height: AppSpacing.m),
+            _DateField(date: _date, onTap: _pickDate),
             const SizedBox(height: AppSpacing.m),
             DropdownButtonFormField<MealType>(
               value: _type,
@@ -2501,7 +2567,10 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
                 ),
               ),
             PrimaryButton(
-                label: 'Salvar refeição', isLoading: _saving, onPressed: _save),
+              label: _isEditing ? 'Salvar alterações' : 'Salvar refeição',
+              isLoading: _saving,
+              onPressed: _save,
+            ),
           ],
         ),
       ),
@@ -2513,6 +2582,62 @@ class _AddMealSheetState extends ConsumerState<AddMealSheet> {
         controller: c,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
       );
+}
+
+/// Campo de data do formulário — abre o seletor nativo, sempre limitado
+/// a hoje (nunca datas futuras).
+class _DateField extends StatelessWidget {
+  const _DateField({required this.date, required this.onTap});
+
+  final DateTime date;
+  final VoidCallback onTap;
+
+  String _label() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (date == today) return 'Hoje · ${_fmt(date)}';
+    if (date == today.subtract(const Duration(days: 1))) {
+      return 'Ontem · ${_fmt(date)}';
+    }
+    return _fmt(date);
+  }
+
+  String _fmt(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/'
+      '${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Data', style: AppTypography.caption),
+        const SizedBox(height: 6),
+        InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.input),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(AppRadius.input),
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.calendar_today,
+                    size: 18, color: AppColors.textSecondary),
+                const SizedBox(width: 10),
+                Expanded(child: Text(_label(), style: AppTypography.body)),
+                const Icon(Icons.expand_more,
+                    size: 20, color: AppColors.textSecondary),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 DARTEOF_MEALSHEET
 
@@ -2526,45 +2651,103 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../shared/widgets/widgets.dart';
+import '../controllers/nutrition_controller.dart';
 import '../domain/nutrition_enums.dart';
 import '../models/macro_nutrients.dart';
 import '../models/nutrition_goal.dart';
 import '../providers/nutrition_providers.dart';
 import '../widgets/add_meal_sheet.dart';
+import '../widgets/nutrition_report_sections.dart';
 
-/// Tela de nutrição — resumo do dia, água e refeições (PROMPT 10).
+/// Tela de Nutrição — abas Hoje / Semana / Mês (PROMPT 10 + ajustes V1).
+///
+/// "Hoje" mostra o resumo do dia em exibição (com navegação para dias
+/// anteriores); "Semana" e "Mês" mostram os relatórios agregados
+/// calculados a partir dos dados já registrados pelo usuário.
 class NutritionScreen extends ConsumerWidget {
   const NutritionScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: const VisAppBar(
+          title: 'Nutrição',
+          accent: AppColors.accentGreen,
+          bottom: TabBar(
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white70,
+            indicatorColor: Colors.white,
+            tabs: [
+              Tab(text: 'Hoje'),
+              Tab(text: 'Semana'),
+              Tab(text: 'Mês'),
+            ],
+          ),
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: () => AddMealSheet.show(
+            context,
+            initialDate: ref.read(nutritionControllerProvider).date,
+          ),
+          icon: const Icon(LucideIcons.plus),
+          label: const Text('Refeição'),
+        ),
+        body: const TabBarView(
+          children: [_TodayTab(), _WeekTab(), _MonthTab()],
+        ),
+      ),
+    );
+  }
+}
+
+/// Aba "Hoje" — resumo do dia em exibição + navegação para dias
+/// anteriores (nunca datas futuras).
+class _TodayTab extends ConsumerWidget {
+  const _TodayTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final day = ref.watch(nutritionControllerProvider);
+    final controller = ref.read(nutritionControllerProvider.notifier);
     final goal = ref.watch(nutritionGoalProvider);
     final macros = day.macros;
+    final isToday = controller.isToday;
 
-    return Scaffold(
-      appBar: const VisAppBar(title: 'Nutrição', accent: AppColors.accentGreen),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => AddMealSheet.show(context),
-        icon: const Icon(LucideIcons.plus),
-        label: const Text('Refeição'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(AppSpacing.m),
-        children: [
-          _summary(macros, goal),
-          const SizedBox(height: AppSpacing.m),
+    return ListView(
+      padding: const EdgeInsets.all(AppSpacing.m),
+      children: [
+        _DateNav(date: day.date, isToday: isToday, controller: controller),
+        const SizedBox(height: AppSpacing.m),
+        _summary(macros, goal),
+        const SizedBox(height: AppSpacing.m),
+        if (isToday) ...[
           _water(context, ref, day.waterMl, goal.waterMl ?? 2500),
           const SizedBox(height: AppSpacing.m),
-          Text('Refeições de hoje', style: AppTypography.subtitle),
-          const SizedBox(height: AppSpacing.s),
-          if (day.meals.isEmpty)
-            Text('Nenhuma refeição registrada hoje.',
-                style: AppTypography.caption)
-          else
-            for (final m in day.meals)
-              CardContainer(
+        ] else if (day.waterMl > 0) ...[
+          _waterReadOnly(day.waterMl, goal.waterMl ?? 2500),
+          const SizedBox(height: AppSpacing.m),
+        ],
+        Text(
+          isToday ? 'Refeições de hoje' : 'Refeições do dia',
+          style: AppTypography.subtitle,
+        ),
+        const SizedBox(height: AppSpacing.s),
+        if (day.meals.isEmpty)
+          Text(
+            isToday
+                ? 'Nenhuma refeição registrada hoje.'
+                : 'Nenhuma refeição registrada neste dia.',
+            style: AppTypography.caption,
+          )
+        else
+          for (final m in day.meals)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.s),
+              child: CardContainer(
                 padding: const EdgeInsets.all(12),
+                onTap: () => AddMealSheet.show(context, editingMeal: m),
                 child: Row(
                   children: [
                     const Icon(LucideIcons.utensils,
@@ -2586,11 +2769,14 @@ class NutritionScreen extends ConsumerWidget {
                     ),
                     Text('${m.macros.calories.toStringAsFixed(0)} kcal',
                         style: AppTypography.small),
+                    const SizedBox(width: 4),
+                    const Icon(LucideIcons.chevronRight,
+                        size: 16, color: AppColors.textSecondary),
                   ],
                 ),
               ),
-        ],
-      ),
+            ),
+      ],
     );
   }
 
@@ -2672,6 +2858,104 @@ class NutritionScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// Mesmo card de água, mas sem os atalhos de registro rápido — usado ao
+  /// visualizar um dia anterior (água só é registrada "agora").
+  Widget _waterReadOnly(int current, int goal) {
+    final progress = goal <= 0 ? 0.0 : (current / goal).clamp(0.0, 1.0);
+    return CardContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(LucideIcons.droplet, color: AppColors.primary, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Água', style: AppTypography.subtitle)),
+              Text('$current / $goal ml', style: AppTypography.small),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s),
+          VisProgressBar(value: progress, color: AppColors.primary),
+        ],
+      ),
+    );
+  }
+}
+
+/// Cabeçalho com navegação de dia (‹ Hoje/Ontem/dd-mm-aaaa ›). Nunca
+/// permite avançar além de hoje.
+class _DateNav extends StatelessWidget {
+  const _DateNav({
+    required this.date,
+    required this.isToday,
+    required this.controller,
+  });
+
+  final DateTime date;
+  final bool isToday;
+  final NutritionController controller;
+
+  String _label() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final d = DateTime(date.year, date.month, date.day);
+    if (d == today) return 'Hoje';
+    if (d == today.subtract(const Duration(days: 1))) return 'Ontem';
+    return '${d.day.toString().padLeft(2, '0')}/'
+        '${d.month.toString().padLeft(2, '0')}/${d.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.chevron_left),
+          tooltip: 'Dia anterior',
+          onPressed: controller.goToPreviousDay,
+        ),
+        GestureDetector(
+          onTap: isToday ? null : controller.goToToday,
+          child: Column(
+            children: [
+              Text(_label(), style: AppTypography.subtitle),
+              if (!isToday)
+                Text('Toque para voltar a hoje', style: AppTypography.small),
+            ],
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.chevron_right),
+          tooltip: 'Próximo dia',
+          onPressed: isToday ? null : controller.goToNextDay,
+        ),
+      ],
+    );
+  }
+}
+
+/// Aba "Semana" — relatório da semana corrente (segunda a domingo).
+class _WeekTab extends ConsumerWidget {
+  const _WeekTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final report = ref.watch(nutritionWeekReportProvider);
+    return NutritionReportView(report: report, periodLabel: 'semana');
+  }
+}
+
+/// Aba "Mês" — relatório do mês corrente.
+class _MonthTab extends ConsumerWidget {
+  const _MonthTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final report = ref.watch(nutritionMonthReportProvider);
+    return NutritionReportView(report: report, periodLabel: 'mês');
   }
 }
 DARTEOF_NUTRISCREEN
@@ -4103,6 +4387,7 @@ DARTEOF_AIWKSCREEN
 
 echo "    - lib/features/workout_session/presentation/workout_session_screen.dart"
 cat > lib/features/workout_session/presentation/workout_session_screen.dart <<'DARTEOF_SESSIONSCREEN'
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -4112,6 +4397,8 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../shared/widgets/widgets.dart';
+import '../../exercise/data/exercise_media.dart';
+import '../../workout/models/exercise_ref.dart';
 import '../controllers/workout_session_controller.dart';
 import '../domain/session_enums.dart';
 import '../providers/workout_session_providers.dart';
@@ -4329,7 +4616,9 @@ class _ExerciseList extends ConsumerWidget {
                 ],
               ),
               Text(ex.exercise.muscleGroup, style: AppTypography.small),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
+              _ExerciseSessionMedia(exercise: ex.exercise),
+              const SizedBox(height: 8),
               _ExerciseNoteField(
                 key: ValueKey('note_${ex.id}'),
                 initial: ex.note ?? '',
@@ -4357,6 +4646,74 @@ class _ExerciseList extends ConsumerWidget {
         );
       },
     );
+  }
+}
+
+/// Imagem/GIF do exercício durante a execução do treino.
+///
+/// Reaproveita a mesma mídia já cadastrada na Biblioteca de exercícios
+/// (ExerciseMedia/AnimatedExerciseImage) para que o usuário veja a
+/// execução correta sem sair do treino. É puramente apresentacional —
+/// não lê nem altera o estado da sessão, então não interfere no
+/// cronômetro, no descanso ou no registro de séries.
+class _ExerciseSessionMedia extends StatelessWidget {
+  const _ExerciseSessionMedia({required this.exercise});
+
+  final ExerciseRef exercise;
+
+  @override
+  Widget build(BuildContext context) {
+    final frames = ExerciseMedia.framesFor(exercise.id);
+    final fallbackUrl = _fallbackImageUrl(exercise);
+    final placeholder = Container(
+      color: AppColors.card,
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(LucideIcons.dumbbell, size: 28, color: AppColors.disabled),
+          const SizedBox(height: 6),
+          Text(
+            'Sem imagem disponível',
+            style: AppTypography.small.copyWith(color: AppColors.disabled),
+          ),
+        ],
+      ),
+    );
+
+    Widget content;
+    if (frames.isNotEmpty) {
+      // Exercício com GIF/frames cadastrados na Biblioteca.
+      content = AnimatedExerciseImage(frames: frames, placeholder: placeholder);
+    } else if (fallbackUrl != null) {
+      // Sem frames, mas o exercício tem uma imagem/gif próprio.
+      content = CachedNetworkImage(
+        imageUrl: fallbackUrl,
+        fit: BoxFit.cover,
+        placeholder: (_, __) => placeholder,
+        errorWidget: (_, __, ___) => placeholder,
+      );
+    } else {
+      // Nenhuma mídia cadastrada para este exercício.
+      content = placeholder;
+    }
+
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: content,
+      ),
+    );
+  }
+
+  /// GIF, se houver; senão a imagem estática; senão `null`.
+  String? _fallbackImageUrl(ExerciseRef exercise) {
+    final gif = exercise.gifUrl;
+    if (gif != null && gif.isNotEmpty) return gif;
+    final image = exercise.imageUrl;
+    if (image != null && image.isNotEmpty) return image;
+    return null;
   }
 }
 
