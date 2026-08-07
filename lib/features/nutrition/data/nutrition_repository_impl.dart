@@ -1,3 +1,4 @@
+import '../../../core/utils/date_utils.dart';
 import '../domain/nutrition_local_store.dart';
 import '../models/meal.dart';
 import '../models/nutrition_goal.dart';
@@ -23,6 +24,12 @@ final class NutritionRepositoryImpl implements NutritionRepository {
   bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
+  /// `true` se [d] (ignorando a hora) está entre [start] e [end], inclusive.
+  bool _inRange(DateTime d, DateTime start, DateTime end) {
+    final day = dateOnly(d);
+    return !day.isBefore(dateOnly(start)) && !day.isAfter(dateOnly(end));
+  }
+
   List<Meal> _allMeals() {
     final list = _store.readList(_uid, _meals).map(Meal.fromMap).toList()
       ..sort((a, b) => b.consumedAt.compareTo(a.consumedAt));
@@ -36,8 +43,26 @@ final class NutritionRepositoryImpl implements NutritionRepository {
   }
 
   @override
+  Future<void> updateMeal(Meal meal) async {
+    final list = _store.readList(_uid, _meals);
+    final index = list.indexWhere((m) => m['id'] == meal.id);
+    if (index == -1) {
+      // Refeição não encontrada (ex.: já removida em outro dispositivo):
+      // grava como novo registro em vez de perder os dados do usuário.
+      list.add(meal.toMap());
+    } else {
+      list[index] = meal.toMap();
+    }
+    await _store.writeList(_uid, _meals, list);
+  }
+
+  @override
   List<Meal> mealsForDay(DateTime day) =>
       _allMeals().where((m) => _sameDay(m.consumedAt, day)).toList();
+
+  @override
+  List<Meal> mealsForRange(DateTime start, DateTime end) =>
+      _allMeals().where((m) => _inRange(m.consumedAt, start, end)).toList();
 
   @override
   List<Meal> recentMeals({int limit = 20}) => _allMeals().take(limit).toList();
@@ -54,6 +79,15 @@ final class NutritionRepositoryImpl implements NutritionRepository {
         .readList(_uid, _water)
         .map(WaterIntake.fromMap)
         .where((w) => _sameDay(w.at, day))
+        .fold(0, (sum, w) => sum + w.amountMl);
+  }
+
+  @override
+  int waterForRangeMl(DateTime start, DateTime end) {
+    return _store
+        .readList(_uid, _water)
+        .map(WaterIntake.fromMap)
+        .where((w) => _inRange(w.at, start, end))
         .fold(0, (sum, w) => sum + w.amountMl);
   }
 
