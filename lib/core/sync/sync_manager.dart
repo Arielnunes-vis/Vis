@@ -91,6 +91,13 @@ final class SyncManager {
     }
   }
 
+  /// Busca todas as linhas de [table] visíveis para o usuário atual
+  /// (a RLS do Supabase já filtra por usuário). Usado para baixar dados
+  /// já existentes na nuvem em um dispositivo/atalho novo, que ainda não
+  /// tem nada salvo localmente.
+  Future<List<Map<String, dynamic>>> fetchAll(String table) =>
+      _database.select(table);
+
   Future<void> _send(PendingSync item) async {
     switch (item.operation) {
       case SyncOperation.insert:
