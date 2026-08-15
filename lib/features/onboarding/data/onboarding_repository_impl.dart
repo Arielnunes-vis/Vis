@@ -61,6 +61,17 @@ final class OnboardingRepositoryImpl implements OnboardingRepository {
     final local = await _secureStorage.read(SecureKeys.onboardingCompleted);
     if (local == userId) return true;
 
+    // Em um dispositivo/atalho novo (sem checagem local ainda), consulta
+    // o Supabase. Logo após o login, a sessão pode levar um instante para
+    // ficar totalmente pronta — se a primeira tentativa falhar, tenta
+    // mais uma vez após um pequeno intervalo antes de assumir pendente
+    // (evita mandar de volta para o onboarding um usuário que já concluiu).
+    var done = await _checkRemote(userId);
+    done ??= await _retryRemoteAfterDelay(userId);
+    return done ?? false;
+  }
+
+  Future<bool?> _checkRemote(String userId) async {
     try {
       final rows = await _database
           .from('users')
@@ -74,9 +85,15 @@ final class OnboardingRepositoryImpl implements OnboardingRepository {
         }
         return done;
       }
+      return false;
     } catch (e) {
-      AppLogger.w('[Onboarding] isCompleted falhou, assumindo pendente.');
+      AppLogger.w('[Onboarding] isCompleted falhou: $e');
+      return null;
     }
-    return false;
+  }
+
+  Future<bool?> _retryRemoteAfterDelay(String userId) async {
+    await Future<void>.delayed(const Duration(seconds: 1));
+    return _checkRemote(userId);
   }
 }
