@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/storage/local_storage_service.dart';
+import '../../../core/sync/sync_manager.dart';
 import '../../authentication/providers/authentication_providers.dart';
 import '../../exercise/providers/exercise_providers.dart'
     show exerciseUserDataStoreProvider;
@@ -20,6 +21,7 @@ final workoutSessionRepositoryProvider = Provider<WorkoutSessionRepository>(
     exerciseStore: ref.watch(exerciseUserDataStoreProvider),
     currentUserId: () =>
         ref.read(authenticationRepositoryProvider).currentUser?.id,
+    sync: ref.watch(syncManagerProvider),
   ),
 );
 
