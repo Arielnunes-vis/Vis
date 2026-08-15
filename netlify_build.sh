@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env bashset -euo pipefail echo "==> Instalando Flutter 3.29.3 (versao fixada, compativel com os pacotes)…"git clone https://github.com/flutter/flutter.git --depth 1 -b 3.29.3 "$HOME/flutter"export PATH="$HOME/flutter/bin:$PATH"git config --global --add safe.directory "$HOME/flutter" || trueflutter --versionflutter config --enable-web echo "==> Gerando a plataforma web…"flutter create --platforms web --project-name vis --org com.vis . echo "==> Aplicando correcoes de compilacao…"EDITOR_FILE=lib/features/workout/presentation/workout_editor_screen.dartif ! grep -q "controllers/workout_editor_controller.dart" "$EDITOR_FILE"; then  sed -i "s|import '../domain/workout_enums.dart';|import '../controllers/workout_editor_controller.dart';\nimport '../domain/workout_enums.dart';|" "$EDITOR_FILE"fi NOTIF_FILE=lib/features/notifications/services/local_notification_service.dartif ! grep -q "uiLocalNotificationDateInterpretation" "$NOTIF_FILE"; then  sed -i "s|androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,|androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,\n          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,|g" "$NOTIF_FILE"fi echo "==> Ajustando env.dart para ler as chaves embutidas…"ENV_FILE=lib/core/config/env.dartif ! grep -q "String.fromEnvironment('SUPABASE_URL')" "$ENV_FILE"; then  sed -i "s|await dotenv.load(fileName: fileName);|try { await dotenv.load(fileName: fileName); } catch (_) {}|" "$ENV_FILE"  sed -i "s|static String get supabaseUrl => _require('SUPABASE_URL');|static String get supabaseUrl { const v = String.fromEnvironment('SUPABASE_URL'); return v.isNotEmpty ? v : _require('SUPABASE_URL'); }|" "$ENV_FILE"  sed -i "s|static String get supabaseAnonKey => _require('SUPABASE_ANON_KEY');|static String get supabaseAnonKey { const v = String.fromEnvironment('SUPABASE_ANON_KEY'); return v.isNotEmpty ? v : _require('SUPABASE_ANON_KEY'); }|" "$ENV_FILE"fi echo "==> Criando .env (fallback local)…"printf 'SUPABASE_URL=%s\nSUPABASE_ANON_KEY=%s\n' "${SUPABASE_URL:-}" "${SUPABASE_ANON_KEY:-}" > .env echo "==> Garantindo pastas de assets…"mkdir -p assets/images assets/icons assets/gifs assets/fonts echo "==> E#!/usr/bin/env bash
 set -euo pipefail
 
 echo "==> Instalando Flutter 3.29.3 (versao fixada, compativel com os pacotes)…"
@@ -5390,6 +5390,13 @@ abstract interface class BodyProgressRepository {
   List<WeightRecord> weightHistory();
   WeightRecord? latestWeight();
 
+  /// Reenvia todo o histórico de peso local para a nuvem (Supabase).
+  /// Seguro chamar várias vezes (upsert por id) — usado ao iniciar o
+  /// app para alinhar local e nuvem (ex.: primeiro uso após ativar a
+  /// sincronização, ou um dispositivo/atalho que ainda não tinha os
+  /// dados).
+  Future<void> syncWeightHistory();
+
   // ----- Medidas -----
   Future<void> addMeasurement(MeasurementRecord record);
   List<MeasurementRecord> measurementHistory();
@@ -5409,6 +5416,8 @@ DARTEOF_BODYREPO
 
 echo "    - lib/features/body_progress/data/body_progress_repository_impl.dart"
 cat > lib/features/body_progress/data/body_progress_repository_impl.dart <<'DARTEOF_BODYREPOIMPL'
+import '../../../core/sync/pending_sync.dart';
+import '../../../core/sync/sync_manager.dart';
 import '../domain/body_enums.dart';
 import '../domain/body_progress_local_store.dart';
 import '../models/body_goal.dart';
@@ -5422,11 +5431,18 @@ final class BodyProgressRepositoryImpl implements BodyProgressRepository {
   BodyProgressRepositoryImpl({
     required BodyProgressLocalStore store,
     required String? Function() currentUserId,
+    // Opcional: ausente em testes (que não precisam de rede/Supabase),
+    // presente em produção via Riverpod (syncManagerProvider). Quando
+    // nulo, a sincronização é simplesmente pulada — o registro local
+    // continua sendo salvo normalmente.
+    SyncManager? sync,
   })  : _store = store,
-        _currentUserId = currentUserId;
+        _currentUserId = currentUserId,
+        _sync = sync;
 
   final BodyProgressLocalStore _store;
   final String? Function() _currentUserId;
+  final SyncManager? _sync;
 
   String get _uid => _currentUserId() ?? 'local';
 
@@ -5440,6 +5456,17 @@ final class BodyProgressRepositoryImpl implements BodyProgressRepository {
   Future<void> addWeight(WeightRecord record) async {
     final list = _store.read(_uid, _weight)..add(record.toMap());
     await _store.write(_uid, _weight, list);
+    if (record.userId.isNotEmpty && _sync != null) {
+      await _sync.enqueueAndSync(
+        PendingSync(
+          id: 'weight_history_${record.id}',
+          table: 'weight_history',
+          operation: SyncOperation.insert,
+          payload: _weightPayload(record),
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
   }
 
   @override
@@ -5454,6 +5481,39 @@ final class BodyProgressRepositoryImpl implements BodyProgressRepository {
     final h = weightHistory();
     return h.isEmpty ? null : h.first;
   }
+
+  @override
+  Future<void> syncWeightHistory() async {
+    final sync = _sync;
+    if (sync == null) return;
+    final uid = _currentUserId();
+    if (uid == null || uid.isEmpty) return;
+    for (final record in weightHistory()) {
+      await sync.enqueueAndSync(
+        PendingSync(
+          id: 'weight_history_${record.id}',
+          table: 'weight_history',
+          operation: SyncOperation.insert,
+          payload: _weightPayload(record),
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  /// Mapeia o registro local para as colunas de `weight_history`
+  /// (Supabase). `note` -> `observation` porque o nome da coluna é
+  /// diferente do campo do modelo local.
+  Map<String, dynamic> _weightPayload(WeightRecord r) => {
+        'id': r.id,
+        'user_id': r.userId,
+        'weight': r.weight,
+        'body_fat': r.bodyFat,
+        'muscle_mass': r.muscleMass,
+        'observation': r.note,
+        'source': r.source.name,
+        'created_at': r.recordedAt.toIso8601String(),
+      };
 
   // ----- Medidas -----
   @override
@@ -6515,4 +6575,4 @@ flutter build web --release \
   --dart-define=SUPABASE_URL="${SUPABASE_URL:-}" \
   --dart-define=SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
 
-echo "==> Build concluido: build/web"
+echo "==> Build concluido: build/web"screvendo arquivos ajustados…"mkdir -p lib/shared/widgets/media lib/shared/widgets/navigation
