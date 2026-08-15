@@ -7,6 +7,7 @@ import '../core/supabase/supabase_provider.dart';
 import '../core/sync/sync_manager.dart';
 import '../core/theme/app_theme.dart';
 import '../features/body_progress/providers/body_progress_providers.dart';
+import '../features/workout_session/providers/workout_session_providers.dart';
 import 'router.dart';
 
 /// Widget raiz do VIS.
@@ -44,7 +45,7 @@ class _VisAppState extends ConsumerState<VisApp> {
       (previous, next) {
         if (next.value?.session != null) {
           // ignore: discarded_futures
-          _bootstrapWeightSync();
+          _bootstrapSync();
         }
       },
       fireImmediately: true,
@@ -57,15 +58,19 @@ class _VisAppState extends ConsumerState<VisApp> {
     super.dispose();
   }
 
-  /// Alinha o histórico de peso com a nuvem nos dois sentidos: primeiro
-  /// baixa o que já existe no Supabase (para um aparelho/atalho novo que
-  /// ainda não tem nada salvo localmente), depois envia o que só existe
-  /// neste aparelho (para o caso de ter sido criado antes da sincronização
-  /// existir, ou enquanto estava offline).
-  Future<void> _bootstrapWeightSync() async {
-    final repo = ref.read(bodyProgressRepositoryProvider);
-    await repo.restoreWeightHistory();
-    await repo.syncWeightHistory();
+  /// Alinha os dados já sincronizáveis (peso e treinos) com a nuvem nos
+  /// dois sentidos: primeiro baixa o que já existe no Supabase (para um
+  /// aparelho/atalho novo que ainda não tem nada salvo localmente),
+  /// depois envia o que só existe neste aparelho (para o caso de ter
+  /// sido criado antes da sincronização existir, ou enquanto offline).
+  Future<void> _bootstrapSync() async {
+    final weight = ref.read(bodyProgressRepositoryProvider);
+    await weight.restoreWeightHistory();
+    await weight.syncWeightHistory();
+
+    final workouts = ref.read(workoutSessionRepositoryProvider);
+    await workouts.restoreSessions();
+    await workouts.syncRecentSessions();
   }
 
   @override
