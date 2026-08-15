@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/sync/sync_manager.dart';
 import '../core/theme/app_theme.dart';
+import '../features/body_progress/providers/body_progress_providers.dart';
 import 'router.dart';
 
 /// Widget raiz do VIS.
@@ -24,6 +26,13 @@ class _VisAppState extends ConsumerState<VisApp> {
     // o roteamento após o primeiro frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(routerNotifierProvider).setReady();
+      // Inicia a sincronização offline -> nuvem (PROMPT 01) e garante que
+      // o histórico de peso já salvo neste aparelho suba para o Supabase
+      // (para aparecer também em outros lugares, como o atalho na tela
+      // inicial do iPhone).
+      ref.read(syncManagerProvider).start();
+      // ignore: discarded_futures
+      ref.read(bodyProgressRepositoryProvider).syncWeightHistory();
     });
   }
 
