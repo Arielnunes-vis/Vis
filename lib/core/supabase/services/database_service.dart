@@ -30,6 +30,16 @@ abstract interface class IDatabaseService {
 
   /// Soft delete (23_DEVELOPMENT_RULES / 09_SUPABASE) — nunca DELETE físico.
   Future<void> softDelete(String table, {required String id});
+
+  /// Insere ou atualiza por conflito de [onConflict] (padrão `id`).
+  /// Usado pela sincronização offline-first (core/sync): permite
+  /// reenviar a mesma operação com segurança em caso de reprocessamento,
+  /// sem duplicar linhas nem sobrescrever histórico indevidamente.
+  Future<Map<String, dynamic>> upsert(
+    String table,
+    Map<String, dynamic> values, {
+    String onConflict = 'id',
+  });
 }
 
 final class SupabaseDatabaseService implements IDatabaseService {
@@ -93,6 +103,25 @@ final class SupabaseDatabaseService implements IDatabaseService {
           .eq('id', id);
     } catch (e, st) {
       AppLogger.e('[DB] softDelete $table falhou', error: e, stackTrace: st);
+      throw SupabaseErrorMapper.map(e, st);
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> upsert(
+    String table,
+    Map<String, dynamic> values, {
+    String onConflict = 'id',
+  }) async {
+    try {
+      final data = await _client
+          .from(table)
+          .upsert(values, onConflict: onConflict)
+          .select()
+          .single();
+      return data;
+    } catch (e, st) {
+      AppLogger.e('[DB] upsert $table falhou', error: e, stackTrace: st);
       throw SupabaseErrorMapper.map(e, st);
     }
   }
