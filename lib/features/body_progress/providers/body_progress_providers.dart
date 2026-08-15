@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/storage/local_storage_service.dart';
+import '../../../core/sync/sync_manager.dart';
 import '../../authentication/providers/authentication_providers.dart';
 import '../controllers/goals_controller.dart';
 import '../controllers/measurements_controller.dart';
@@ -23,6 +24,7 @@ final bodyProgressRepositoryProvider = Provider<BodyProgressRepository>(
     store: const HiveBodyProgressLocalStore(LocalStorageService()),
     currentUserId: () =>
         ref.read(authenticationRepositoryProvider).currentUser?.id,
+    sync: ref.watch(syncManagerProvider),
   ),
 );
 
