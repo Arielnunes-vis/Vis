@@ -26,14 +26,22 @@ class _VisAppState extends ConsumerState<VisApp> {
     // o roteamento após o primeiro frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(routerNotifierProvider).setReady();
-      // Inicia a sincronização offline -> nuvem (PROMPT 01) e garante que
-      // o histórico de peso já salvo neste aparelho suba para o Supabase
-      // (para aparecer também em outros lugares, como o atalho na tela
-      // inicial do iPhone).
+      // Inicia a sincronização offline -> nuvem (PROMPT 01).
       ref.read(syncManagerProvider).start();
       // ignore: discarded_futures
-      ref.read(bodyProgressRepositoryProvider).syncWeightHistory();
+      _bootstrapWeightSync();
     });
+  }
+
+  /// Alinha o histórico de peso com a nuvem nos dois sentidos: primeiro
+  /// baixa o que já existe no Supabase (para um aparelho/atalho novo que
+  /// ainda não tem nada salvo localmente), depois envia o que só existe
+  /// neste aparelho (para o caso de ter sido criado antes da sincronização
+  /// existir, ou enquanto estava offline).
+  Future<void> _bootstrapWeightSync() async {
+    final repo = ref.read(bodyProgressRepositoryProvider);
+    await repo.restoreWeightHistory();
+    await repo.syncWeightHistory();
   }
 
   @override
